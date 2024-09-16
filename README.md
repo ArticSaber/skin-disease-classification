@@ -282,3 +282,72 @@ This implementation:
 1. Authenticates the user with their email and bcrypt password using `/authenticate`.
 2. Generates a JWT token with the user’s role in the payload.
 3. Protects the `/getallusers` route so that only users with `ROLE_ADMIN` can access it.
+import io.jsonwebtoken.Claims;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import javax.servlet.FilterChain;
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Optional;
+
+public class JwtFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private MyUserDetailsService userDetailsService;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+
+        // Retrieve JWT from cookies
+        String token = null;
+        String username = null;
+
+        // Get the cookies from the request
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            // Look for a cookie named "jwt"
+            Optional<Cookie> jwtCookie = Arrays.stream(cookies)
+                    .filter(cookie -> "jwt".equals(cookie.getName()))
+                    .findFirst();
+
+            // If found, extract the token
+            if (jwtCookie.isPresent()) {
+                token = jwtCookie.get().getValue();
+            }
+        }
+
+        // Process the token if it's available
+        if (token != null) {
+            try {
+                username = jwtUtil.extractUsername(token);
+            } catch (Exception e) {
+                // Handle invalid token scenario, maybe log it
+            }
+        }
+
+        // If username is present and not yet authenticated, validate the token
+        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+            if (jwtUtil.validateToken(token, username)) {
+                // Create authentication and set it in the security context
+                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                        userDetails, null, userDetails.getAuthorities());
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+            }
+        }
+
+        // Proceed with the filter chain
+        filterChain.doFilter(request, response);
+    }
+}
