@@ -1,4 +1,4 @@
-Here's a full implementation of JWT-based authentication with role-based access control (RBAC) using `Spring Boot 3`. This setup ensures that only users with the `admin` role can access the `/getallusers` endpoint, and `/authenticate` allows users to log in by validating their credentials against the bcrypt password stored in the database.
+3Here's a full implementation of JWT-based authentication with role-based access control (RBAC) using `Spring Boot 3`. This setup ensures that only users with the `admin` role can access the `/getallusers` endpoint, and `/authenticate` allows users to log in by validating their credentials against the bcrypt password stored in the database.
 
 ### Steps:
 1. **Add dependencies**: Ensure you have the necessary dependencies in your `pom.xml`.
@@ -350,4 +350,56 @@ public class JwtFilter extends OncePerRequestFilter {
         // Proceed with the filter chain
         filterChain.doFilter(request, response);
     }
+}
+
+
+
+
+@Override
+protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+        throws ServletException, IOException {
+
+    String token = null;
+    String username = null;
+
+    // Get the JWT from the cookie
+    Cookie[] cookies = request.getCookies();
+    if (cookies != null) {
+        Optional<Cookie> jwtCookie = Arrays.stream(cookies)
+                .filter(cookie -> "jwt".equals(cookie.getName()))
+                .findFirst();
+
+        if (jwtCookie.isPresent()) {
+            token = jwtCookie.get().getValue();
+        }
+    }
+
+    if (token != null) {
+        try {
+            username = jwtUtil.extractUsername(token);
+
+            // Extract the role array from the JWT claims
+            Claims claims = jwtUtil.extractAllClaims(token);
+            List<Map<String, String>> roles = (List<Map<String, String>>) claims.get("role");
+
+            // Convert the roles into GrantedAuthority
+            List<GrantedAuthority> authorities = roles.stream()
+                    .map(role -> new SimpleGrantedAuthority(role.get("authority")))
+                    .collect(Collectors.toList());
+
+            // Set the authentication if the token is valid
+            if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                if (jwtUtil.validateToken(token, username)) {
+                    UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                            userDetails, null, authorities);
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
+            }
+        } catch (Exception e) {
+            // Handle invalid token scenario
+        }
+    }
+
+    filterChain.doFilter(request, response);
 }
