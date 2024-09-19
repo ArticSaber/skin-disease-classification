@@ -524,4 +524,166 @@ public class UserController {
 ### Key Considerations:
 - Make sure the JWT secret (`your-secret-key`) in the `JwtUtil` class matches the one you used when generating the token.
 - Replace `"your-cookie-name"` with the actual name of the cookie where you store the JWT.
+- 
+
+
+
+In the context of your team-based collaboration project using WebSockets, the client (typically a web app using JavaScript) establishes a connection with the server and communicates with it in real-time by sending and receiving messages. This allows for immediate updates without the need to refresh or poll the server for changes.
+
+### 1. **Setting Up WebSocket on the Client Side (Frontend)**
+
+For this, you would typically use something like **SockJS** or **Stomp.js** (especially in Spring WebSocket applications) to manage WebSocket connections and messaging.
+
+Here's how you can use functions (fn) in JavaScript to handle WebSocket interactions for your todo app.
+
+#### Step 1: **Connect to the WebSocket**
+You'll need to establish a connection to the WebSocket server using **SockJS** and **Stomp.js**.
+
+```html
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+<script>
+    var stompClient = null;
+
+    // Connect to WebSocket
+    function connect() {
+        var socket = new SockJS('/ws');
+        stompClient = Stomp.over(socket);
+        stompClient.connect({}, function (frame) {
+            console.log('Connected: ' + frame);
+
+            // Subscribe to personal todos
+            stompClient.subscribe('/topic/personalTodoUpdates', function (message) {
+                displayTodo(JSON.parse(message.body)); // Handle personal todo updates
+            });
+
+            // Subscribe to team todos
+            stompClient.subscribe('/topic/teamTodoUpdates', function (message) {
+                displayTeamTodo(JSON.parse(message.body)); // Handle team todo updates
+            });
+        });
+    }
+
+    // Disconnect the WebSocket
+    function disconnect() {
+        if (stompClient !== null) {
+            stompClient.disconnect();
+        }
+        console.log("Disconnected");
+    }
+</script>
+```
+
+#### Step 2: **Send Messages to the WebSocket (Adding/Updating Todos)**
+
+When a user adds or updates a todo, you'll send a message to the server using WebSocket.
+
+```html
+<script>
+    // Send new personal todo
+    function sendPersonalTodo(todo) {
+        stompClient.send("/app/personalTodo/add", {}, JSON.stringify(todo));
+    }
+
+    // Send new team todo
+    function sendTeamTodo(teamTodo) {
+        stompClient.send("/app/teamTodo/add", {}, JSON.stringify(teamTodo));
+    }
+
+    // Update personal todo
+    function updatePersonalTodo(todo) {
+        stompClient.send("/app/personalTodo/update", {}, JSON.stringify(todo));
+    }
+
+    // Update team todo
+    function updateTeamTodo(teamTodo) {
+        stompClient.send("/app/teamTodo/update", {}, JSON.stringify(teamTodo));
+    }
+</script>
+```
+
+#### Step 3: **Handle Messages Received from the WebSocket**
+
+When the server sends a message (like a new or updated todo), your frontend will receive the message, and you can use a function (`fn`) to handle it.
+
+```html
+<script>
+    // Display personal todo when a new one is added/updated
+    function displayTodo(todo) {
+        // Logic to add todo to the DOM
+        console.log("New Personal Todo:", todo);
+        // e.g., Append todo to a list in the HTML
+    }
+
+    // Display team todo when a new one is added/updated
+    function displayTeamTodo(teamTodo) {
+        // Logic to add team todo to the DOM
+        console.log("New Team Todo:", teamTodo);
+        // e.g., Append team todo to a list in the HTML
+    }
+</script>
+```
+
+### 2. **How It Works:**
+
+#### **Connecting to WebSocket:**
+- The `connect()` function establishes a WebSocket connection to the server using SockJS and subscribes to specific topics (`/topic/personalTodoUpdates` and `/topic/teamTodoUpdates`).
+- Whenever a new todo is added or an existing todo is updated, the server broadcasts the message to the appropriate topic, and the subscribed clients receive the update in real-time.
+
+#### **Sending Data via WebSocket:**
+- Functions like `sendPersonalTodo()` and `sendTeamTodo()` send new todos to the server using WebSocket when the user adds them.
+- Similarly, the `updatePersonalTodo()` and `updateTeamTodo()` functions send updates when a todo is modified.
+
+#### **Handling Received Data:**
+- When the server sends updates (new/modified todos) to the client, they are handled by the `displayTodo()` and `displayTeamTodo()` functions.
+- These functions would typically update the DOM to reflect the new or updated todo in the UI without a page refresh.
+
+### 3. **Backend Spring WebSocket Controller Integration**
+
+On the backend (as I mentioned in the previous response), you'll have a WebSocket controller that handles the messages sent by the client and processes them (adding/updating todos), and then broadcasts the results back to subscribed clients.
+
+```java
+@Controller
+public class TodoWebSocketController {
+
+    // Add new personal todo
+    @MessageMapping("/personalTodo/add")
+    @SendTo("/topic/personalTodoUpdates")
+    public TodoItem addPersonalTodo(TodoItem todoItem) {
+        // Save the new todo to the database
+        return todoItem; // Broadcast the new todo to all subscribed clients
+    }
+
+    // Add new team todo
+    @MessageMapping("/teamTodo/add")
+    @SendTo("/topic/teamTodoUpdates")
+    public TeamTodoItem addTeamTodo(TeamTodoItem todoItem) {
+        // Save the new team todo to the database
+        return todoItem; // Broadcast the new team todo to all subscribed clients
+    }
+
+    // Update personal todo
+    @MessageMapping("/personalTodo/update")
+    @SendTo("/topic/personalTodoUpdates")
+    public TodoItem updatePersonalTodo(TodoItem todoItem) {
+        // Update the todo in the database
+        return todoItem; // Broadcast the updated todo to all subscribed clients
+    }
+
+    // Update team todo
+    @MessageMapping("/teamTodo/update")
+    @SendTo("/topic/teamTodoUpdates")
+    public TeamTodoItem updateTeamTodo(TeamTodoItem todoItem) {
+        // Update the team todo in the database
+        return todoItem; // Broadcast the updated team todo to all subscribed clients
+    }
+}
+```
+
+### Summary:
+- WebSockets allow real-time communication for both adding and updating todos.
+- The client uses functions (`fn`) to send and receive WebSocket messages, updating the UI without page reloads.
+- The server (using Spring WebSocket) broadcasts updates to all subscribed clients, ensuring real-time synchronization.
+
+This setup ensures that todos—whether personal or team-based—are immediately visible and editable in real-time by all relevant users.
 
