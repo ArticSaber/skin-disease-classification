@@ -403,3 +403,125 @@ protected void doFilterInternal(HttpServletRequest request, HttpServletResponse 
 
     filterChain.doFilter(request, response);
 }
+
+
+
+
+
+To retrieve the user ID from a JWT stored in a cookie in Spring Boot, you can write a helper function that extracts the cookie, decodes the JWT, and retrieves the user ID. Here's a step-by-step guide:
+
+### Steps:
+1. **Extract the cookie from the request**.
+2. **Decode the JWT** stored in the cookie.
+3. **Retrieve the user ID** from the decoded JWT claims.
+
+Here’s how you can write a helper function to do this:
+
+### 1. **JWT Utility for Parsing Token**:
+First, ensure you have a utility function that can extract the user ID from the JWT.
+
+```java
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+
+public class JwtUtil {
+
+    private String secret = "your-secret-key"; // Replace with your actual secret key
+
+    public String extractUserId(String token) {
+        Claims claims = extractAllClaims(token);
+        return claims.get("userId", String.class); // Assuming you stored the userId in the token
+    }
+
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser()
+                .setSigningKey(secret)
+                .parseClaimsJws(token)
+                .getBody();
+    }
+}
+```
+
+### 2. **Helper Function to Retrieve User ID from Cookie**:
+Now, let’s write a helper function that extracts the JWT from the cookie and retrieves the user ID.
+
+```java
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import java.util.Arrays;
+
+public class CookieUtil {
+
+    private JwtUtil jwtUtil;
+
+    public CookieUtil(JwtUtil jwtUtil) {
+        this.jwtUtil = jwtUtil;
+    }
+
+    public String getUserIdFromCookie(HttpServletRequest request) {
+        // Extract the JWT from the cookie
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            // Find the cookie that stores the JWT
+            Cookie jwtCookie = Arrays.stream(cookies)
+                    .filter(cookie -> "your-cookie-name".equals(cookie.getName())) // Replace with your actual cookie name
+                    .findFirst()
+                    .orElse(null);
+
+            if (jwtCookie != null) {
+                // Extract user ID from JWT
+                String jwtToken = jwtCookie.getValue();
+                return jwtUtil.extractUserId(jwtToken);
+            }
+        }
+
+        // Return null if no JWT cookie found or user ID cannot be extracted
+        return null;
+    }
+}
+```
+
+### 3. **Using the Helper in the Update Route**:
+You can use this helper function in your controller when the update route is called.
+
+```java
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import javax.servlet.http.HttpServletRequest;
+
+@RestController
+@RequestMapping("/api/user")
+public class UserController {
+
+    private final CookieUtil cookieUtil;
+
+    public UserController(CookieUtil cookieUtil) {
+        this.cookieUtil = cookieUtil;
+    }
+
+    @PutMapping("/update")
+    public String updateUser(HttpServletRequest request) {
+        // Retrieve user ID from cookie
+        String userId = cookieUtil.getUserIdFromCookie(request);
+
+        if (userId == null) {
+            return "Unauthorized request: User ID not found";
+        }
+
+        // Proceed with the update logic using the userId from the cookie
+        return "User details updated for ID: " + userId;
+    }
+}
+```
+
+### Explanation:
+1. **`JwtUtil`**: This utility extracts the user ID from the JWT.
+2. **`CookieUtil`**: This utility retrieves the JWT from the cookie in the request and then uses `JwtUtil` to get the user ID from the token.
+3. **Controller**: In your controller's update route, you can now directly use the `getUserIdFromCookie` method to securely get the logged-in user’s ID and proceed with the update logic.
+
+### Key Considerations:
+- Make sure the JWT secret (`your-secret-key`) in the `JwtUtil` class matches the one you used when generating the token.
+- Replace `"your-cookie-name"` with the actual name of the cookie where you store the JWT.
+
