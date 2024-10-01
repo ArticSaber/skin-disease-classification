@@ -992,4 +992,24 @@ Ensure your WebSocket client is connected to ws://localhost:8080/ws.
 This setup provides a basic WebSocket-based todo management system for both personal and team-based todos.
 
 
+<dependencies>
+    <!-- Spring Boot Starter for WebSocket -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-websocket</artifactId>
+    </dependency>
 
+    <!-- Spring Boot Starter for Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Optional: Spring Boot DevTools for LiveReload -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-devtools</artifactId>
+        <scope>runtime</scope>
+        <optional>true</optional>
+    </dependency>
+</dependencies>
