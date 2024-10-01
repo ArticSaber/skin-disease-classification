@@ -1013,3 +1013,293 @@ This setup provides a basic WebSocket-based todo management system for both pers
         <optional>true</optional>
     </dependency>
 </dependencies>
+
+
+
+
+
+
+---------------
+Alright, let’s simplify it by using a single table for todos, which will handle both personal and team-based todos based on whether a teamId is present or not.
+
+Updated Project Structure
+
+src
+└── main
+    ├── java
+    │   └── com
+    │       └── example
+    │           └── websocketdemo
+    │               ├── config
+    │               │   └── WebSocketConfig.java
+    │               ├── controller
+    │               │   └── TodoWebSocketController.java
+    │               ├── model
+    │               │   └── TodoItem.java
+    │               ├── repository
+    │               │   └── TodoRepository.java
+    │               ├── service
+    │               │   └── TodoService.java
+    │               └── WebSocketDemoApplication.java
+    └── resources
+        └── application.properties
+
+1. Database Configuration in application.properties
+
+Make sure your Oracle database is set up and configured correctly:
+
+# Oracle Database Configuration
+spring.datasource.url=jdbc:oracle:thin:@//localhost:1521/ORCLPDB1
+spring.datasource.username=YOUR_DB_USERNAME
+spring.datasource.password=YOUR_DB_PASSWORD
+spring.datasource.driver-class-name=oracle.jdbc.OracleDriver
+
+# JPA Configuration
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.Oracle12cDialect
+
+2. Model Class
+
+Create a TodoItem model class that represents both personal and team todos based on the teamId attribute.
+
+TodoItem.java
+
+package com.example.websocketdemo.model;
+
+import javax.persistence.Entity;
+import javax.persistence.Id;
+import javax.persistence.Table;
+
+@Entity
+@Table(name = "TODO_ITEM")
+public class TodoItem {
+    @Id
+    private String id;
+    private String userId; // User ID of the owner
+    private String teamId; // If null, it's a personal todo; if not null, it's a team todo
+    private String title;
+    private String description;
+    private boolean completed;
+
+    // Getters and Setters
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
+    public String getTeamId() {
+        return teamId;
+    }
+
+    public void setTeamId(String teamId) {
+        this.teamId = teamId;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public boolean isCompleted() {
+        return completed;
+    }
+
+    public void setCompleted(boolean completed) {
+        this.completed = completed;
+    }
+}
+
+3. Repository Interface
+
+Create a repository interface that extends JpaRepository for accessing the Oracle database.
+
+TodoRepository.java
+
+package com.example.websocketdemo.repository;
+
+import com.example.websocketdemo.model.TodoItem;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface TodoRepository extends JpaRepository<TodoItem, String> {
+    List<TodoItem> findByUserId(String userId);
+    List<TodoItem> findByTeamId(String teamId);
+}
+
+4. Service Layer
+
+Create a TodoService class to handle business logic.
+
+TodoService.java
+
+package com.example.websocketdemo.service;
+
+import com.example.websocketdemo.model.TodoItem;
+import com.example.websocketdemo.repository.TodoRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class TodoService {
+
+    @Autowired
+    private TodoRepository todoRepository;
+
+    public TodoItem addOrUpdateTodo(TodoItem todoItem) {
+        return todoRepository.save(todoItem);
+    }
+
+    public List<TodoItem> getUserTodos(String userId) {
+        return todoRepository.findByUserId(userId);
+    }
+
+    public List<TodoItem> getTeamTodos(String teamId) {
+        return todoRepository.findByTeamId(teamId);
+    }
+}
+
+5. WebSocket Configuration
+
+Configure the WebSocket using WebSocketConfig.java:
+
+WebSocketConfig.java
+
+package com.example.websocketdemo.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic");
+        config.setApplicationDestinationPrefixes("/app");
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws").setAllowedOrigins("*").withSockJS();
+    }
+}
+
+6. WebSocket Controller
+
+Create a TodoWebSocketController to handle WebSocket messages for todos.
+
+TodoWebSocketController.java
+
+package com.example.websocketdemo.controller;
+
+import com.example.websocketdemo.model.TodoItem;
+import com.example.websocketdemo.service.TodoService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.stereotype.Controller;
+
+import java.util.List;
+
+@Controller
+public class TodoWebSocketController {
+
+    @Autowired
+    private TodoService todoService;
+
+    // Add or update a todo item
+    @MessageMapping("/todo/addOrUpdate")
+    @SendTo("/topic/todoUpdates")
+    public TodoItem addOrUpdateTodo(TodoItem todoItem) {
+        return todoService.addOrUpdateTodo(todoItem);
+    }
+
+    // Get all personal todos for a specific user
+    @MessageMapping("/todo/user")
+    @SendTo("/topic/userTodos")
+    public List<TodoItem> getUserTodos(String userId) {
+        return todoService.getUserTodos(userId);
+    }
+
+    // Get all team todos for a specific team
+    @MessageMapping("/todo/team")
+    @SendTo("/topic/teamTodos")
+    public List<TodoItem> getTeamTodos(String teamId) {
+        return todoService.getTeamTodos(teamId);
+    }
+}
+
+7. Main Application
+
+Create a main class to run the Spring Boot application:
+
+WebSocketDemoApplication.java
+
+package com.example.websocketdemo;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class WebSocketDemoApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(WebSocketDemoApplication.class, args);
+    }
+}
+
+8. Database Table Setup
+
+Create a TODO_ITEM table in your Oracle database with the following schema:
+
+CREATE TABLE TODO_ITEM (
+    ID VARCHAR2(50) PRIMARY KEY,
+    USER_ID VARCHAR2(50),
+    TEAM_ID VARCHAR2(50),
+    TITLE VARCHAR2(100),
+    DESCRIPTION VARCHAR2(255),
+    COMPLETED NUMBER(1)
+);
+
+Summary
+
+Single WebSocket endpoint (/ws) to handle personal and team-based todos.
+
+The table structure determines if a todo is personal (teamId is null) or team-based (teamId is set).
+
+Messages are sent to topics (/topic/todoUpdates, /topic/userTodos, and /topic/teamTodos) for different updates.
+
+
+
