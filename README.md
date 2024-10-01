@@ -687,3 +687,309 @@ public class TodoWebSocketController {
 
 This setup ensures that todos—whether personal or team-based—are immediately visible and editable in real-time by all relevant users.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Sure! Below is a complete Spring Boot WebSocket application setup for a todo list with two WebSocket endpoints: one for personal todos and one for team-based todos. This will cover the basic configuration, the WebSocket controller, and a basic service layer for handling the business logic. You can expand this setup as needed.
+
+1. Project Structure:
+
+Here’s what the project structure will look like:
+
+src
+└── main
+    ├── java
+    │   └── com
+    │       └── example
+    │           └── websocketdemo
+    │               ├── config
+    │               │   └── WebSocketConfig.java
+    │               ├── controller
+    │               │   └── TodoWebSocketController.java
+    │               ├── model
+    │               │   ├── TodoItem.java
+    │               │   └── TeamTodoItem.java
+    │               ├── service
+    │               │   └── TodoService.java
+    │               └── WebSocketDemoApplication.java
+    └── resources
+        └── application.properties
+
+2. Dependencies:
+
+In your pom.xml file, add the following dependencies:
+
+<dependencies>
+    <!-- Spring Boot Starter for WebSocket -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-websocket</artifactId>
+    </dependency>
+
+    <!-- Spring Boot Starter for Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Optional: Spring Boot DevTools for LiveReload -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-devtools</artifactId>
+        <scope>runtime</scope>
+        <optional>true</optional>
+    </dependency>
+</dependencies>
+
+3. WebSocket Configuration:
+
+Create a configuration file WebSocketConfig.java in the config package:
+
+package com.example.websocketdemo.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic"); // Enable simple broker with /topic prefix
+        config.setApplicationDestinationPrefixes("/app"); // Application destination prefix
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws").setAllowedOrigins("*").withSockJS(); // WebSocket endpoint for SockJS
+    }
+}
+
+4. Model Classes:
+
+Create a model package and add the following two classes for todo items:
+
+TodoItem.java (For Personal Todos)
+
+package com.example.websocketdemo.model;
+
+public class TodoItem {
+    private String id;
+    private String title;
+    private String description;
+    private boolean completed;
+
+    // Getters and Setters
+    public String getId() {
+        return id;
+    }
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public boolean isCompleted() {
+        return completed;
+    }
+    public void setCompleted(boolean completed) {
+        this.completed = completed;
+    }
+}
+
+TeamTodoItem.java (For Team-Based Todos)
+
+package com.example.websocketdemo.model;
+
+public class TeamTodoItem {
+    private String id;
+    private String teamId;
+    private String title;
+    private String description;
+    private boolean completed;
+
+    // Getters and Setters
+    public String getId() {
+        return id;
+    }
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getTeamId() {
+        return teamId;
+    }
+    public void setTeamId(String teamId) {
+        this.teamId = teamId;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public boolean isCompleted() {
+        return completed;
+    }
+    public void setCompleted(boolean completed) {
+        this.completed = completed;
+    }
+}
+
+5. Service Layer:
+
+Create a service package and a simple TodoService class to handle adding/updating todos:
+
+package com.example.websocketdemo.service;
+
+import com.example.websocketdemo.model.TodoItem;
+import com.example.websocketdemo.model.TeamTodoItem;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Service
+public class TodoService {
+
+    private Map<String, TodoItem> personalTodos = new HashMap<>();
+    private Map<String, TeamTodoItem> teamTodos = new HashMap<>();
+
+    public TodoItem addPersonalTodo(TodoItem todo) {
+        personalTodos.put(todo.getId(), todo);
+        return todo;
+    }
+
+    public TeamTodoItem addTeamTodo(TeamTodoItem todo) {
+        teamTodos.put(todo.getId(), todo);
+        return todo;
+    }
+
+    public TodoItem updatePersonalTodo(TodoItem todo) {
+        personalTodos.put(todo.getId(), todo);
+        return todo;
+    }
+
+    public TeamTodoItem updateTeamTodo(TeamTodoItem todo) {
+        teamTodos.put(todo.getId(), todo);
+        return todo;
+    }
+}
+
+6. WebSocket Controller:
+
+Create a controller package and add the following TodoWebSocketController.java:
+
+package com.example.websocketdemo.controller;
+
+import com.example.websocketdemo.model.TodoItem;
+import com.example.websocketdemo.model.TeamTodoItem;
+import com.example.websocketdemo.service.TodoService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.stereotype.Controller;
+
+@Controller
+public class TodoWebSocketController {
+
+    @Autowired
+    private TodoService todoService;
+
+    // For adding personal todos
+    @MessageMapping("/personalTodo/add")
+    @SendTo("/topic/personalTodoUpdates")
+    public TodoItem addPersonalTodo(TodoItem todoItem) {
+        return todoService.addPersonalTodo(todoItem);
+    }
+
+    // For adding team todos
+    @MessageMapping("/teamTodo/add")
+    @SendTo("/topic/teamTodoUpdates")
+    public TeamTodoItem addTeamTodo(TeamTodoItem todoItem) {
+        return todoService.addTeamTodo(todoItem);
+    }
+
+    // For updating personal todos
+    @MessageMapping("/personalTodo/update")
+    @SendTo("/topic/personalTodoUpdates")
+    public TodoItem updatePersonalTodo(TodoItem todoItem) {
+        return todoService.updatePersonalTodo(todoItem);
+    }
+
+    // For updating team todos
+    @MessageMapping("/teamTodo/update")
+    @SendTo("/topic/teamTodoUpdates")
+    public TeamTodoItem updateTeamTodo(TeamTodoItem todoItem) {
+        return todoService.updateTeamTodo(todoItem);
+    }
+}
+
+7. Spring Boot Main Class:
+
+Create a main class to run the Spring Boot application:
+
+package com.example.websocketdemo;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class WebSocketDemoApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(WebSocketDemoApplication.class, args);
+    }
+}
+
+8. Frontend Integration:
+
+You can connect to this WebSocket backend using JavaScript and the Stomp.js library, similar to the client-side code provided in the previous response.
+
+9. Run the Application:
+
+Run the Spring Boot application.
+
+Ensure your WebSocket client is connected to ws://localhost:8080/ws.
+
+
+This setup provides a basic WebSocket-based todo management system for both personal and team-based todos.
+
+
+
