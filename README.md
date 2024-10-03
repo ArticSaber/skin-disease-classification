@@ -1302,4 +1302,223 @@ The table structure determines if a todo is personal (teamId is null) or team-ba
 Messages are sent to topics (/topic/todoUpdates, /topic/userTodos, and /topic/teamTodos) for different updates.
 
 
+To handle personal and team todos separately in a real-time collaborative environment, you need to have a structured way of sending, receiving, and reflecting updates based on the context (whether it’s a personal or team todo). This involves configuring WebSocket endpoints correctly and making use of specific channels (topics) for personal and team-based updates.
+
+WebSocket Design for Personal and Team Todos
+
+1. Separate WebSocket Topics for Personal and Team Todos:
+
+For personal todos, each user can have their own unique topic (e.g., /topic/personal/{userId}).
+
+For team todos, use a topic based on the teamId (e.g., /topic/team/{teamId}).
+
+
+
+2. Filtering and Broadcasting Updates:
+
+When a todo is added or updated, identify whether it’s a personal or team todo based on the teamId.
+
+Personal Todo: If teamId is null or empty, broadcast the update to the user-specific topic.
+
+Team Todo: If teamId is present, broadcast to the teamId topic.
+
+
+
+3. Client Subscription Strategy:
+
+Each client (user) should subscribe to their own personal topic and the topics for each team they are a member of.
+
+When fetching todos from the database, clients should request personal todos (userId) and team todos (teamId) separately.
+
+When a todo is updated or added, the server should push these changes to the correct topic based on whether the todo is personal or team-based.
+
+
+
+
+Implementation Plan
+
+1. Separate WebSocket topics for personal todos and team todos.
+
+
+2. Listeners and WebSocket handlers to broadcast changes to the appropriate topics.
+
+
+3. Fetching and reflecting changes based on client subscriptions.
+
+
+
+Code Implementation in Spring Boot
+
+Here’s how you can structure the backend WebSocket configuration, service logic, and WebSocket controller for managing personal and team todos.
+
+1. Configure WebSocket Endpoints
+
+Set up WebSocket configurations for the client to connect and subscribe to the relevant topics.
+
+package com.example.websocketdemo.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic");  // Prefix for broadcast messages
+        config.setApplicationDestinationPrefixes("/app");  // Prefix for client-to-server messages
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws-todo").setAllowedOrigins("*").withSockJS();
+    }
+}
+
+/topic is used for broadcasting updates (e.g., /topic/personal/{userId} and /topic/team/{teamId}).
+
+/app is used for client-to-server communication.
+
+
+2. Create the WebSocket Controller
+
+Create a controller that maps and handles messages for adding and updating todos.
+
+package com.example.websocketdemo.controller;
+
+import com.example.websocketdemo.model.TodoItem;
+import com.example.websocketdemo.service.TodoService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Controller;
+
+@Controller
+public class TodoWebSocketController {
+
+    @Autowired
+    private TodoService todoService;
+
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
+
+    // Add a new todo item and broadcast to the respective topic
+    @MessageMapping("/todo/create")
+    public void createTodo(TodoItem todoItem) {
+        TodoItem createdTodo = todoService.createTodo(todoItem);
+
+        if (createdTodo.getTeamId() != null) {
+            // Broadcast to team topic
+            messagingTemplate.convertAndSend("/topic/team/" + createdTodo.getTeamId(), createdTodo);
+        } else {
+            // Broadcast to personal user topic
+            messagingTemplate.convertAndSend("/topic/personal/" + createdTodo.getUserId(), createdTodo);
+        }
+    }
+
+    // Patch an existing todo and broadcast updates to the respective topic
+    @MessageMapping("/todo/update")
+    public void updateTodo(TodoItem todoItem) {
+        TodoItem updatedTodo = todoService.updateTodoFields(todoItem.getId(), todoItem);
+
+        if (updatedTodo.getTeamId() != null) {
+            // Broadcast to team topic
+            messagingTemplate.convertAndSend("/topic/team/" + updatedTodo.getTeamId(), updatedTodo);
+        } else {
+            // Broadcast to personal user topic
+            messagingTemplate.convertAndSend("/topic/personal/" + updatedTodo.getUserId(), updatedTodo);
+        }
+    }
+}
+
+3. Service Layer for Creating and Updating Todos
+
+The service layer should handle creating new todos and partially updating existing todos while validating the data.
+
+package com.example.websocketdemo.service;
+
+import com.example.websocketdemo.model.TodoItem;
+import com.example.websocketdemo.repository.CredsRepository;
+import com.example.websocketdemo.repository.TeamMemberRepository;
+import com.example.websocketdemo.repository.TodoRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Service
+public class TodoService {
+
+    @Autowired
+    private TodoRepository todoRepository;
+
+    @Autowired
+    private CredsRepository credsRepository;
+
+    @Autowired
+    private TeamMemberRepository teamMemberRepository;
+
+    // Create a new TodoItem
+    public TodoItem createTodo(TodoItem todoItem) {
+        if (validateTodoItem(todoItem)) {
+            return todoRepository.save(todoItem);
+        } else {
+            throw new RuntimeException("Invalid Todo Data: User is not authorized.");
+        }
+    }
+
+    // Patch (partial update) for TodoItem
+    public TodoItem updateTodoFields(String todoId, TodoItem patchData) {
+        TodoItem existingTodo = todoRepository.findById(todoId)
+                .orElseThrow(() -> new RuntimeException("Todo not found"));
+
+        // Apply partial updates
+        if (patchData.getTitle() != null) {
+            existingTodo.setTitle(patchData.getTitle());
+        }
+        if (patchData.getDescription() != null) {
+            existingTodo.setDescription(patchData.getDescription());
+        }
+        if (patchData.getCompleted() != null) {
+            existingTodo.setCompleted(patchData.getCompleted());
+        }
+
+        // Save updated entity
+        return todoRepository.save(existingTodo);
+    }
+
+    private boolean validateTodoItem(TodoItem todoItem) {
+        if (!credsRepository.existsByUserId(todoItem.getUserId())) {
+            return false;
+        }
+        if (todoItem.getTeamId() != null && !todoItem.getTeamId().isEmpty()) {
+            return teamMemberRepository.existsByTeamIdAndUserId(todoItem.getTeamId(), todoItem.getUserId());
+        }
+        return true;
+    }
+}
+
+4. Client Subscription Strategy
+
+Personal Todos: Clients should subscribe to /topic/personal/{userId} to receive updates for their personal todos.
+
+Team Todos: Clients should subscribe to /topic/team/{teamId} for each team they belong to.
+
+
+5. Fetching Todos in the Client
+
+1. Personal Todos: Make a separate API call to get all personal todos based on the userId.
+
+
+2. Team Todos: Make a separate API call for each teamId the user belongs to.
+
+
+
+By setting up separate WebSocket topics for personal and team todos and using appropriate endpoints, you can easily differentiate and broadcast updates based on the type of todo, ensuring that the UI is updated in real-time for all members involved.
+
+Let me know if this approach fits your requirements or if you need additional modifications!
+
 
