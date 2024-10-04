@@ -1931,3 +1931,125 @@ Depending on the browser and security configurations, cookie-based authenticatio
 Let me know if this implementation fits your requirements or if you need help configuring Postman or the frontend for testing!
 
 
+
+
+
+
+
+
+[÷(@,,'cnxmmznzzmznznjsbfidneneeee
+
+If you’re using Spring Boot, you can achieve this using JPA (Java Persistence API) to query your database. Below is a simple example to guide you through the process of creating the necessary repository and service layer to fetch the team details for a given user.
+
+1. Entities:
+
+Create JPA entities corresponding to your team and team_member tables.
+
+// Team.java
+@Entity
+public class Team {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String teamName;
+
+    // Getters and Setters
+}
+
+// TeamMember.java
+@Entity
+public class TeamMember {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+    private Long teamId;
+
+    // Getters and Setters
+}
+
+2. Repository Layer:
+
+Create a TeamMemberRepository with a custom query to fetch team details using userId.
+
+// TeamMemberRepository.java
+@Repository
+public interface TeamMemberRepository extends JpaRepository<TeamMember, Long> {
+    
+    @Query("SELECT new com.example.dto.TeamDto(t.id, t.teamName) " +
+           "FROM TeamMember tm JOIN Team t ON tm.teamId = t.id " +
+           "WHERE tm.userId = :userId")
+    List<TeamDto> findTeamsByUserId(@Param("userId") Long userId);
+}
+
+3. DTO Class:
+
+Create a Data Transfer Object (DTO) to represent the team information to be sent to the client.
+
+// TeamDto.java
+package com.example.dto;
+
+public class TeamDto {
+    private Long teamId;
+    private String teamName;
+
+    public TeamDto(Long teamId, String teamName) {
+        this.teamId = teamId;
+        this.teamName = teamName;
+    }
+
+    // Getters and Setters
+}
+
+4. Service Layer:
+
+Create a service to fetch the team details for the given user.
+
+// TeamService.java
+@Service
+public class TeamService {
+    
+    @Autowired
+    private TeamMemberRepository teamMemberRepository;
+
+    public List<TeamDto> getTeamsByUserId(Long userId) {
+        return teamMemberRepository.findTeamsByUserId(userId);
+    }
+}
+
+5. Controller Layer:
+
+Create a REST controller to handle the request and send the response to the client.
+
+// TeamController.java
+@RestController
+@RequestMapping("/api/teams")
+public class TeamController {
+    
+    @Autowired
+    private TeamService teamService;
+
+    @GetMapping("/{userId}")
+    public ResponseEntity<List<TeamDto>> getTeamsByUserId(@PathVariable Long userId) {
+        List<TeamDto> teams = teamService.getTeamsByUserId(userId);
+        return ResponseEntity.ok(teams);
+    }
+}
+
+6. Running the Application:
+
+Once everything is set up, run your Spring Boot application and make a GET request to the endpoint:
+
+GET http://localhost:8080/api/teams/{userId}
+
+Key Points:
+
+The custom query in TeamMemberRepository uses a JOIN between TeamMember and Team entities to fetch the teamId and teamName.
+
+The data is sent using a simple DTO (TeamDto) to keep your response format clean and separate from the database models.
+
+
+This setup should provide you with the required team details for a given user ID in a structured format. Let me know if you need to expand it further!
+
