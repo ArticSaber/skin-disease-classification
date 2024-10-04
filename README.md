@@ -1752,3 +1752,182 @@ stompClient.connect({ bearertoken: 'YOUR_JWT_TOKEN' }, (frame) => {
 3. **Database Integration**: The example assumes a basic setup for JWT handling. For a complete project, integrate with repositories, services, and database entities to handle the todos.
 
 Let me know if this configuration fits your requirements or if you need adjustments for any specific features!
+
+
+
+
+
+
+
+
+
+
+
+
+
+_-_-_-_&#*÷*÷;#&×*<#>[+[+*×,₹;%&₹[(÷;@>+*₹[×**+₹>#&*×*@&@*#
+Certainly! If you want to handle WebSocket authentication using a cookie instead of a header, you can modify your JwtHandshakeInterceptor to extract the JWT from the cookie. This approach will work if the JWT is stored as a cookie named, for example, auth-token. Below is a complete implementation of a JwtHandshakeInterceptor that extracts the JWT from the cookies:
+
+JwtHandshakeInterceptor Using Cookies
+
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.server.HandshakeInterceptor;
+
+import javax.servlet.http.Cookie;
+import java.util.Map;
+
+public class JwtHandshakeInterceptor implements HandshakeInterceptor {
+
+    private final JwtUtil jwtUtil;
+
+    public JwtHandshakeInterceptor(JwtUtil jwtUtil) {
+        this.jwtUtil = jwtUtil;
+    }
+
+    @Override
+    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                   WebSocketHandler wsHandler, Map<String, Object> attributes) {
+        // Extract JWT token from cookies
+        String jwtToken = getJwtFromCookies(request);
+
+        if (jwtToken != null) {
+            if (jwtUtil.validateToken(jwtToken)) {
+                String username = jwtUtil.extractUsername(jwtToken);
+                attributes.put("username", username);  // Store the username as a WebSocket session attribute
+                return true;
+            }
+        }
+        return false;  // Reject handshake if JWT is invalid or missing
+    }
+
+    @Override
+    public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                               WebSocketHandler wsHandler, Exception exception) {
+    }
+
+    private String getJwtFromCookies(ServerHttpRequest request) {
+        if (request.getHeaders().containsKey("Cookie")) {
+            String cookieHeader = request.getHeaders().getFirst("Cookie");
+            if (cookieHeader != null) {
+                for (String cookie : cookieHeader.split(";")) {
+                    String[] cookieParts = cookie.split("=");
+                    if (cookieParts.length == 2) {
+                        String cookieName = cookieParts[0].trim();
+                        String cookieValue = cookieParts[1].trim();
+                        if ("auth-token".equals(cookieName)) {  // Replace with your cookie name
+                            return cookieValue;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+}
+
+Key Points of the Implementation:
+
+1. Extracting JWT from Cookies:
+
+The getJwtFromCookies method extracts the auth-token cookie value from the incoming WebSocket request.
+
+You need to specify the name of the cookie where the JWT is stored (auth-token in this example). Modify this as per your application's cookie name.
+
+
+
+2. JWT Validation:
+
+If a valid JWT is found in the cookie, the interceptor extracts the username and attaches it to the WebSocket session attributes.
+
+If the JWT is invalid or missing, the handshake is rejected.
+
+
+
+3. Storing Attributes for WebSocket Session:
+
+The attributes.put("username", username); line stores the username in the WebSocket session, which can be retrieved in the WebSocket controller.
+
+
+
+
+WebSocket Configuration with the Cookie-Based Interceptor
+
+Now, update your WebSocketConfig to use the custom JwtHandshakeInterceptor:
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws-todo")
+                .addInterceptors(new JwtHandshakeInterceptor(jwtUtil))  // Register the custom cookie-based handshake interceptor
+                .setAllowedOrigins("http://localhost:3000")  // Set your frontend origin
+                .withSockJS();  // Enable SockJS fallback
+    }
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic");  // Broker destination prefix for subscriptions
+        config.setApplicationDestinationPrefixes("/app");  // Prefix for application-specific messages
+    }
+}
+
+Using the Cookie-Based Authentication in Frontend/Testing
+
+When testing this configuration with Postman or another frontend, ensure that:
+
+1. Your WebSocket connection includes the auth-token cookie.
+
+
+2. Set the auth-token cookie in the browser or Postman before connecting to the WebSocket.
+
+
+
+Setting the Cookie in Postman:
+
+1. In Postman, go to the Cookies tab.
+
+
+2. Add a new cookie for localhost (or the appropriate domain).
+
+
+3. Set the auth-token cookie to your JWT value:
+
+auth-token=YOUR_JWT_TOKEN
+
+
+
+4. Now initiate a WebSocket request using Postman.
+
+
+
+Why Use a Cookie-Based Interceptor?
+
+1. Simpler for Browser-Based Clients:
+
+If your JWT is stored as a cookie (e.g., after a successful login), it is automatically included in every subsequent WebSocket connection, making the frontend code simpler.
+
+
+
+2. Improved Security:
+
+Depending on the browser and security configurations, cookie-based authentication can be more secure, especially when using HTTP-only and secure flags for the cookies.
+
+
+
+
+Let me know if this implementation fits your requirements or if you need help configuring Postman or the frontend for testing!
+
+
