@@ -1522,3 +1522,233 @@ By setting up separate WebSocket topics for personal and team todos and using ap
 Let me know if this approach fits your requirements or if you need additional modifications!
 
 
+
+
+
+
+
+
+
+
+_-__-_-_-_-_-_-__-_-_-_-_-_-_-__-_-_-_-_-_-_-_-_-_-__-_-_-_-_-_-_-_-__-_-_-_-_-_
+
+
+
+
+
+
+Here’s a complete implementation for Spring Boot WebSocket configuration using header-based JWT authentication for WebSocket connections, and cookie-based JWT authentication for standard HTTP routes. The provided code will include the following components:
+
+1. **JWT Utility Class (`JwtUtil`)**: To create and parse JWT tokens.
+2. **Custom `JwtHandshakeInterceptor`**: For extracting JWT from headers during WebSocket handshakes.
+3. **WebSocket Configuration (`WebSocketConfig`)**: To configure the WebSocket endpoint with the interceptor.
+4. **Security Configuration (`SecurityConfig`)**: To secure HTTP and WebSocket routes.
+5. **Controller and Service Examples**: To demonstrate how to implement authentication checks.
+6. **Simple WebSocket Controller**: For real-time todo updates.
+
+### 1. **`JwtUtil` Class**
+
+```java
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+
+public class JwtUtil {
+
+    private static final String SECRET_KEY = "my_secret_key";
+
+    public String generateToken(String username, List<String> roles) {
+        return Jwts.builder()
+                .setSubject(username)
+                .claim("roles", roles)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 10))  // 10 hours expiry
+                .signWith(SignatureAlgorithm.HS256, SECRET_KEY)
+                .compact();
+    }
+
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+    }
+
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser().setSigningKey(SECRET_KEY).parseClaimsJws(token).getBody();
+    }
+
+    public Boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+
+    public Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+
+    public Boolean validateToken(String token, String username) {
+        final String extractedUsername = extractUsername(token);
+        return (extractedUsername.equals(username) && !isTokenExpired(token));
+    }
+}
+```
+
+### 2. **`JwtHandshakeInterceptor` Class**
+
+```java
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.server.HandshakeInterceptor;
+
+import java.util.Map;
+
+public class JwtHandshakeInterceptor implements HandshakeInterceptor {
+
+    @Override
+    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                   WebSocketHandler wsHandler, Map<String, Object> attributes) {
+        String jwtToken = request.getHeaders().getFirst("bearertoken");
+
+        if (jwtToken != null && !jwtToken.isEmpty()) {
+            JwtUtil jwtUtil = new JwtUtil();
+            String username = jwtUtil.extractUsername(jwtToken);
+
+            if (username != null && jwtUtil.validateToken(jwtToken, username)) {
+                attributes.put("username", username);
+                return true;
+            }
+        }
+        return false;  // Reject the WebSocket connection if JWT is invalid or missing
+    }
+
+    @Override
+    public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                               WebSocketHandler wsHandler, Exception exception) {
+    }
+}
+```
+
+### 3. **`WebSocketConfig` Class**
+
+```java
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws-todo")
+                .addInterceptors(new JwtHandshakeInterceptor())  // Register JWT Interceptor
+                .setAllowedOrigins("http://localhost:3000")  // Frontend origin
+                .withSockJS();  // Enable SockJS fallback option
+    }
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic");  // Broker destination prefix
+        config.setApplicationDestinationPrefixes("/app");  // Application destination prefix
+    }
+}
+```
+
+### 4. **`SecurityConfig` Class**
+
+```java
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+    @Override
+    protected void configure(HttpSecurity http) throws Exception {
+        http
+            .authorizeRequests()
+                .antMatchers("/ws-todo/**").permitAll()  // Permit WebSocket handshake
+                .antMatchers(HttpMethod.GET, "/api/admin/**").hasAuthority("ADMIN")
+                .antMatchers(HttpMethod.GET, "/api/**").authenticated()
+                .anyRequest().permitAll()
+            .and()
+            .csrf().disable()
+            .headers().frameOptions().disable();
+    }
+}
+```
+
+### 5. **Sample WebSocket Controller**
+
+```java
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.stereotype.Controller;
+
+@Controller
+public class TodoWebSocketController {
+
+    @MessageMapping("/addTodo")  // Listen to "/app/addTodo"
+    @SendTo("/topic/todos")  // Send updates to subscribers of "/topic/todos"
+    public String addTodo(String todo) {
+        return "New Todo Added: " + todo;
+    }
+
+    @MessageMapping("/updateTodo")
+    @SendTo("/topic/todos")
+    public String updateTodo(String todo) {
+        return "Todo Updated: " + todo;
+    }
+}
+```
+
+### 6. **Testing the WebSocket Using `SockJS` (Frontend JavaScript Client)**
+
+```javascript
+// JavaScript client for testing WebSocket connection
+const socket = new SockJS('http://localhost:8080/ws-todo');
+const stompClient = Stomp.over(socket);
+
+// Connect with JWT token in header
+stompClient.connect({ bearertoken: 'YOUR_JWT_TOKEN' }, (frame) => {
+    console.log('Connected: ' + frame);
+
+    // Subscribe to "/topic/todos" to receive updates
+    stompClient.subscribe('/topic/todos', (message) => {
+        console.log('Received message: ' + message.body);
+    });
+
+    // Send a test message
+    stompClient.send('/app/addTodo', {}, 'My new todo item');
+});
+```
+
+### Explanation and Setup
+1. **Backend Components**:
+   - `JwtUtil` handles JWT creation and validation.
+   - `JwtHandshakeInterceptor` processes the `bearertoken` from WebSocket headers.
+   - `WebSocketConfig` sets up the WebSocket endpoint and registers the interceptor.
+   - `SecurityConfig` secures the WebSocket route and HTTP API routes.
+   - `TodoWebSocketController` handles incoming WebSocket messages and broadcasts them.
+
+2. **Frontend/WebSocket Testing**:
+   - Use the JavaScript client to test WebSocket connections.
+   - Connect to the `ws-todo` endpoint with a valid JWT in the headers.
+
+3. **Database Integration**: The example assumes a basic setup for JWT handling. For a complete project, integrate with repositories, services, and database entities to handle the todos.
+
+Let me know if this configuration fits your requirements or if you need adjustments for any specific features!
