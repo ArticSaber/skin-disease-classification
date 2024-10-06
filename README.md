@@ -2053,3 +2053,214 @@ The data is sent using a simple DTO (TeamDto) to keep your response format clean
 
 This setup should provide you with the required team details for a given user ID in a structured format. Let me know if you need to expand it further!
 
+
+
+
+
+
+
+
+
+
+
+
+odo993930393993030030303030303030030303003030303030030303030303003030
+It looks like you’re using a custom JwtHandshakeInterceptor to extract and validate a JWT token from cookies during the WebSocket handshake. I see some structural and syntax issues in the provided code. Let’s refine it and ensure the setup works properly.
+
+Corrected Implementation with Cookie-based JWT for WebSocket
+
+1. WebSocketConfig: This configures the WebSocket endpoint and integrates the JwtHandshakeInterceptor.
+
+
+2. JwtHandshakeInterceptor: Extracts the JWT token from cookies and validates it.
+
+
+3. TodoWebSocketController: Handles incoming WebSocket messages.
+
+
+4. Postman or WebSocket Client: A testing client to subscribe and send messages.
+
+
+
+1. WebSocketConfig Implementation
+
+This class configures the WebSocket with STOMP support and adds the JwtHandshakeInterceptor to handle JWT extraction.
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic"); // Enable a simple broker for "/topic" prefix
+        config.setApplicationDestinationPrefixes("/app"); // Prefix for mapped methods
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        // Register STOMP endpoint and add JWT Handshake Interceptor
+        registry.addEndpoint("/ws-todo")
+                .addInterceptors(new JwtHandshakeInterceptor(jwtUtil))
+                .setAllowedOrigins("http://localhost:3000");  // Frontend origin
+                // Uncomment if using SockJS fallback
+                //.withSockJS();
+    }
+}
+
+2. JwtHandshakeInterceptor Implementation
+
+The JwtHandshakeInterceptor will extract the JWT token from the BearerToken cookie and validate it during the WebSocket handshake.
+
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.server.HandshakeInterceptor;
+
+import java.util.Map;
+
+public class JwtHandshakeInterceptor implements HandshakeInterceptor {
+
+    private final JwtUtil jwtUtil;
+
+    public JwtHandshakeInterceptor(JwtUtil jwtUtil) {
+        this.jwtUtil = jwtUtil;
+    }
+
+    @Override
+    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                   WebSocketHandler wsHandler, Map<String, Object> attributes) {
+        // Extract JWT token from cookies
+        String jwtToken = getJwtFromCookies(request);
+        if (jwtToken != null && !jwtToken.isEmpty()) {
+            String username = jwtUtil.extractUsername(jwtToken);
+            if (username != null && jwtUtil.validateToken(jwtToken, username)) {
+                // Add username to WebSocket session attributes
+                attributes.put("username", username);
+                return true;
+            }
+        }
+        return false; // Reject handshake if JWT is invalid or missing
+    }
+
+    @Override
+    public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                               WebSocketHandler wsHandler, Exception exception) {
+        // Optional: Additional configurations or logging after the handshake
+    }
+
+    // Helper method to extract JWT from cookies
+    private String getJwtFromCookies(ServerHttpRequest request) {
+        if (request.getHeaders().containsKey("Cookie")) {
+            String cookieHeader = request.getHeaders().getFirst("Cookie");
+            if (cookieHeader != null) {
+                for (String cookie : cookieHeader.split(";")) {
+                    String[] cookieParts = cookie.split("=");
+                    if (cookieParts.length == 2) {
+                        String cookieName = cookieParts[0].trim();
+                        String cookieValue = cookieParts[1].trim();
+                        if ("BearerToken".equals(cookieName)) {
+                            return cookieValue;
+                        }
+                    }
+                }
+            }
+        }
+        return null;  // Return null if cookie is not found
+    }
+}
+
+3. TodoWebSocketController Implementation
+
+This is a simple WebSocket controller that listens for messages on /app/addTodo and /app/updateTodo and sends responses to the subscribed /topic/todos topic.
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Controller;
+
+@Controller
+public class TodoWebSocketController {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TodoWebSocketController.class);
+
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
+
+    @MessageMapping("/addTodo")  // Map to "/app/addTodo"
+    @SendTo("/topic/todos")      // Send to "/topic/todos"
+    public String addTodo(String todo) {
+        LOG.info("Received new Todo: " + todo);
+        return "New Todo Added: " + todo;
+    }
+
+    @MessageMapping("/updateTodo")
+    @SendTo("/topic/todos")
+    public String updateTodo(String todo) {
+        LOG.info("Todo Updated: " + todo);
+        return "Todo Updated: " + todo;
+    }
+}
+
+4. Testing with Postman or a WebSocket Client
+
+When using Postman to test the WebSocket:
+
+1. Establish a WebSocket Connection:
+
+URL: ws://localhost:8080/ws-todo
+
+Headers: Include a Cookie header with the JWT:
+
+Cookie: BearerToken=YOUR_JWT_TOKEN
+
+
+
+2. Subscribe to a Topic: Use the SUBSCRIBE command to listen to /topic/todos:
+
+{
+  "command": "SUBSCRIBE",
+  "headers": {
+    "id": "sub-0",
+    "destination": "/topic/todos"
+  }
+}
+
+
+3. Send a Message: Send a SEND frame to /app/addTodo:
+
+{
+  "command": "SEND",
+  "headers": {
+    "destination": "/app/addTodo"
+  },
+  "body": "Buy groceries"
+}
+
+
+
+Summary
+
+With the provided setup:
+
+WebSocket connections are validated using JWTs stored in cookies.
+
+The JwtHandshakeInterceptor ensures only valid users can establish WebSocket connections.
+
+You can use Postman or any WebSocket client to connect, send, and receive messages by setting the correct Cookie header.
+
+
+If you encounter any issues or need further modifications, let me know!
+
