@@ -246,3 +246,33 @@ mvn test -Dsurefire.suiteXmlFiles=src/resources/testng.xml
 
 This structure and code should help you implement the login, add-to-cart, checkout, and logout automation with data-driven testing from Excel. Let me know if you'd like to expand or adjust any part of it!
 
+
+
+
+
+<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+<suite name="EcommerceTestSuite">
+    <test name="EndToEndTests">
+        <classes>
+            <class name="com.yourcompany.testpackage.EndToEndTest"/>
+        </classes>
+    </test>
+</suite>
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d [%t] %-5level: %msg%n%throwable"/>
+        </Console>
+        <File name="File" fileName="logs/testlog.log">
+            <PatternLayout pattern="%d [%t] %-5level: %msg%n%throwable"/>
+        </File>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Root>
+    </Loggers>
+</Configuration>
