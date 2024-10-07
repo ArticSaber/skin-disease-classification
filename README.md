@@ -2296,3 +2296,49 @@ If you encounter any issues or need further modifications, let me know!
 </body>
 </html>
 
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.4.0/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+</head>
+<body>
+    <h1>WebSocket Messages</h1>
+    <ul id="messages"></ul>
+
+    <!-- Input field and button for sending messages -->
+    <input type="text" id="messageInput" placeholder="Enter message" />
+    <button onclick="sendMessage()">Send Message</button>
+
+    <script type="text/javascript">
+        var socket = new SockJS('/ws');
+        var stompClient = Stomp.over(socket);
+
+        // Establish WebSocket connection
+        stompClient.connect({}, function (frame) {
+            console.log('Connected: ' + frame);
+
+            // Subscribe to the /topic/messages topic to receive messages
+            stompClient.subscribe('/topic/messages', function (message) {
+                var messageList = document.getElementById('messages');
+                var newMessage = document.createElement('li');
+                newMessage.appendChild(document.createTextNode(message.body));
+                messageList.appendChild(newMessage);
+            });
+        });
+
+        // Function to send a message to the server
+        function sendMessage() {
+            var messageContent = document.getElementById('messageInput').value;
+            if (messageContent && stompClient) {
+                // Send the message to /app/sendMessage on the server
+                stompClient.send("/app/sendMessage", {}, messageContent);
+                document.getElementById('messageInput').value = ''; // Clear input field after sending
+            }
+        }
+    </script>
+</body>
+</html>
