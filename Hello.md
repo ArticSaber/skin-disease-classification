@@ -249,7 +249,7 @@ This structure and code should help you implement the login, add-to-cart, checko
 
 
 
-
+```
 <!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
 <suite name="EcommerceTestSuite">
     <test name="EndToEndTests">
@@ -258,7 +258,8 @@ This structure and code should help you implement the login, add-to-cart, checko
         </classes>
     </test>
 </suite>
-
+                ```
+```
 <?xml version="1.0" encoding="UTF-8"?>
 <Configuration status="WARN">
     <Appenders>
@@ -276,3 +277,4 @@ This structure and code should help you implement the login, add-to-cart, checko
         </Root>
     </Loggers>
 </Configuration>
+```
