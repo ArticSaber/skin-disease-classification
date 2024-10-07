@@ -1,4 +1,4 @@
-Here’s a basic structure and code layout for the Maven project using TestNG, Excel-based data, and Log4j logging. This will help automate the login, add-to-cart, checkout, and logout processes.
+3Here’s a basic structure and code layout for the Maven project using TestNG, Excel-based data, and Log4j logging. This will help automate the login, add-to-cart, checkout, and logout processes.
 
 1. Project Structure
 
@@ -260,6 +260,7 @@ This structure and code should help you implement the login, add-to-cart, checko
 </suite>
                 ```
 ```
+```
 <?xml version="1.0" encoding="UTF-8"?>
 <Configuration status="WARN">
     <Appenders>
@@ -277,4 +278,5 @@ This structure and code should help you implement the login, add-to-cart, checko
         </Root>
     </Loggers>
 </Configuration>
+```
 ```
