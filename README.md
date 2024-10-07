@@ -2264,3 +2264,35 @@ You can use Postman or any WebSocket client to connect, send, and receive messag
 
 If you encounter any issues or need further modifications, let me know!
 
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.4.0/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+</head>
+<body>
+    <h1>WebSocket Messages</h1>
+    <ul id="messages"></ul>
+
+    <script type="text/javascript">
+        var socket = new SockJS('/ws');
+        var stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, function (frame) {
+            console.log('Connected: ' + frame);
+
+            // Subscribe to /topic/messages to receive broadcasts
+            stompClient.subscribe('/topic/messages', function (message) {
+                var messageList = document.getElementById('messages');
+                var newMessage = document.createElement('li');
+                newMessage.appendChild(document.createTextNode(message.body));
+                messageList.appendChild(newMessage);
+            });
+        });
+    </script>
+</body>
+</html>
+
