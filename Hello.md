@@ -501,3 +501,60 @@ Let me know if this resolves the issue with element loading or if there’s a ne
 
 
 ```
+
+
+
+
+```
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import javax.transaction.Transactional;
+import java.util.concurrent.Executor;
+
+@Service
+@RequiredArgsConstructor
+public class ProcessingService {
+
+    private final RecordService recordService;
+    private final BulkService bulkService;
+    private final TestingService testingService;
+
+    @Autowired
+    private Executor taskExecutor; // Inject the Executor
+
+    @Transactional
+    public void processRecord() {
+        // Step 1: Try to fetch a NOT_COMPLETED bulk from the second table
+        BulkEntity bulk = bulkService.getTopNotCompletedBulk()
+                .orElseGet(() -> {
+                    // Step 2: If all bulks are completed, check for missing bulks
+                    return recordService.getFirstMissingBulkRecord(bulkService.getAllBulkNames())
+                            .map(missingRecord -> bulkService.addMissingBulk(missingRecord.getBulkname()))
+                            .orElseThrow(() -> new RuntimeException("All bulks are completed and no missing bulks to process"));
+                });
+
+        // Step 3: Get the topmost NOT_COMPLETED record for this bulk
+        RecordEntity record = recordService.getTopNotCompletedRecord(bulk.getBulkname())
+                .orElseThrow(() -> new RuntimeException("No records found for bulkname: " + bulk.getBulkname()));
+
+        // Step 4: Store the recordname in the third table
+        testingService.saveRecordName(record.getRecordname());
+
+        // Step 5: Mark the record as completed
+        recordService.markRecordAsCompleted(record);
+
+        // Step 6: If no more NOT_COMPLETED records exist for this bulk, mark it as completed
+        if (recordService.areAllRecordsCompletedForBulk(bulk.getBulkname())) {
+            bulkService.markBulkAsCompleted(bulk.getBulkname());
+        }
+    }
+
+    @Async("taskExecutor")
+    public void asyncProcessRecord() {
+        processRecord();
+    }
+}
+```
