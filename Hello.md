@@ -558,3 +558,80 @@ public class ProcessingService {
     }
 }
 ```
+```
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import javax.transaction.Transactional;
+import java.util.Optional;
+import java.util.concurrent.Executor;
+
+@Service
+@RequiredArgsConstructor
+public class ProcessingService {
+```
+    private final RecordService recordService;
+    private final BulkService bulkService;
+    private final TestingService testingService;
+
+    @Autowired
+    private Executor taskExecutor; // Inject the Executor for async processing
+
+    @Transactional
+    public void processRecord() {
+        // Step 1: Check for unprocessed bulks in the second table
+        Optional<BulkEntity> optionalBulk = bulkService.getTopNotCompletedBulk();
+
+        if (optionalBulk.isPresent()) {
+            // Process the found bulk
+            BulkEntity bulk = optionalBulk.get();
+            processBulk(bulk);
+        } else {
+            // Step 2: If no unprocessed bulks found, check for unprocessed records in the first table
+            Optional<RecordEntity> optionalRecord = recordService.getFirstMissingBulkRecord(bulkService.getAllBulkNames());
+
+            if (optionalRecord.isPresent()) {
+                RecordEntity record = optionalRecord.get();
+                String bulkName = record.getBulkname();
+
+                // Step 3: Check if the bulk name already exists in the bulk table
+                Optional<BulkEntity> existingBulk = bulkService.getBulkByName(bulkName);
+
+                if (existingBulk.isPresent()) {
+                    // Process the existing bulk record
+                    processBulk(existingBulk.get());
+                } else {
+                    // Step 4: If the bulk name does not exist, add it and process the record
+                    BulkEntity newBulk = bulkService.addMissingBulk(bulkName);
+                    processBulk(newBulk);
+                }
+            } else {
+                throw new RuntimeException("No unprocessed records found in the system.");
+            }
+        }
+    }
+
+    private void processBulk(BulkEntity bulk) {
+        // Step 5: Get the topmost NOT_COMPLETED record for this bulk
+        RecordEntity record = recordService.getTopNotCompletedRecord(bulk.getBulkname())
+                .orElseThrow(() -> new RuntimeException("No records found for bulkname: " + bulk.getBulkname()));
+
+        // Step 6: Store the recordname in the third table
+        testingService.saveRecordName(record.getRecordname());
+
+        // Step 7: Mark the record as completed
+        recordService.markRecordAsCompleted(record);
+
+        // Step 8: If no more NOT_COMPLETED records exist for this bulk, mark it as completed
+        if (recordService.areAllRecordsCompletedForBulk(bulk.getBulkname())) {
+            bulkService.markBulkAsCompleted(bulk.getBulkname());
+        }
+    }
+
+    @Async("taskExecutor")
+    public void asyncProcessRecord() {
+        processRecord();
+    }
+}
