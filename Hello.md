@@ -757,84 +757,35 @@ public class AsyncConfig {
     }
 }
 
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.stereotype.Service;
+private void processRecord(RecordEntity record) {
+    String threadName = Thread.currentThread().getName();
+    String recordName = record.getRecordname();
+    int retryCount = 0;
+    final int maxRetries = 3; // Maximum number of retries
 
-import javax.transaction.Transactional;
-import java.util.Optional;
-import java.util.concurrent.Executor;
+    while (retryCount < maxRetries) {
+        try {
+            System.out.println("Processing record: " + recordName + " on thread: " + threadName);
 
-@Service
-@RequiredArgsConstructor
-public class ProcessingService {
+            // Store the record name in the testing table
+            testingService.saveRecordName(recordName);
 
-    private final RecordService recordService;
-    private final BulkService bulkService;
-    private final TestingService testingService;
+            // Mark the record as completed
+            recordService.markRecordAsCompleted(record);
+            System.out.println("Successfully processed record: " + recordName);
+            break; // Exit the retry loop if successful
 
-    @Autowired
-    private Executor taskExecutor; // Inject the Executor for async processing
+        } catch (Exception e) {
+            retryCount++;
+            System.err.println("Error processing record: " + recordName + " on thread: " + threadName + 
+                               ". Attempt " + retryCount + " of " + maxRetries);
+            // Optionally, mark the record as failed or log it in the database for further analysis
 
-    @Transactional
-    public void processRecord() {
-        // Step 1: Check for unprocessed bulks in the second table
-        Optional<BulkEntity> optionalBulk = bulkService.getTopNotCompletedBulk();
-
-        if (optionalBulk.isPresent()) {
-            // Process the found bulk
-            BulkEntity bulk = optionalBulk.get();
-            processBulk(bulk);
-        } else {
-            // Step 2: If no unprocessed bulks found, check for unprocessed records in the first table
-            Optional<RecordEntity> optionalRecord = recordService.getFirstMissingBulkRecord(bulkService.getAllBulkNames());
-
-            if (optionalRecord.isPresent()) {
-                RecordEntity record = optionalRecord.get();
-                String bulkName = record.getBulkname();
-
-                // Step 3: Check if the bulk name already exists in the bulk table
-                Optional<BulkEntity> existingBulk = bulkService.getBulkByName(bulkName);
-
-                if (existingBulk.isPresent()) {
-                    // Process the existing bulk record
-                    processBulk(existingBulk.get());
-                } else {
-                    // Step 4: If the bulk name does not exist, add it and process the record
-                    BulkEntity newBulk = bulkService.addMissingBulk(bulkName);
-                    processBulk(newBulk);
-                }
-            } else {
-                throw new RuntimeException("No unprocessed records found in the system.");
+            if (retryCount >= maxRetries) {
+                System.err.println("Max retries reached for record: " + recordName + ". Marking as failed.");
+                // Here you can mark the record as failed in the database
+                recordService.markRecordAsFailed(record); // You would need to implement this method
             }
         }
     }
-
-    private void processBulk(BulkEntity bulk) {
-        // Step 5: Get the topmost NOT_COMPLETED record for this bulk
-        RecordEntity record = recordService.getTopNotCompletedRecord(bulk.getBulkname())
-                .orElseThrow(() -> new RuntimeException("No records found for bulkname: " + bulk.getBulkname()));
-
-        // Step 6: Store the recordname in the third table
-        testingService.saveRecordName(record.getRecordname());
-
-        // Step 7: Mark the record as completed
-        recordService.markRecordAsCompleted(record);
-
-        // Step 8: Check if no more NOT_COMPLETED records exist for this bulk, mark it as completed
-        if (recordService.areAllRecordsCompletedForBulk(bulk.getBulkname())) {
-            bulkService.markBulkAsCompleted(bulk.getBulkname());
-        } else {
-            // Step 9: If there are still records left for this bulk, check if the bulk should be marked as completed
-            bulkService.markBulkAsCompletedIfNoRecords(bulk.getBulkname());
-        }
-    }
-
-    @Async("taskExecutor")
-    public void asyncProcessRecord() {
-        processRecord();
-    }
 }
-```
-nvm the above last code
