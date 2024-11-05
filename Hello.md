@@ -635,3 +635,206 @@ public class ProcessingService {
         processRecord();
     }
 }
+
+
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+import java.util.List;
+
+@Service
+public class RecordService {
+    private final RecordRepository recordRepository;
+
+    public RecordService(RecordRepository recordRepository) {
+        this.recordRepository = recordRepository;
+    }
+
+    // Fetch records in pages for a given bulk name
+    public List<RecordEntity> findNotCompletedRecordsPaged(String bulkName, int page, int pageSize) {
+        PageRequest pageRequest = PageRequest.of(page, pageSize);
+        return recordRepository.findByBulknameAndStatus(bulkName, "NOT_COMPLETED", pageRequest);
+    }
+    
+    // Other methods for processing and marking records as completed...
+}
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.List;
+
+public interface RecordRepository extends JpaRepository<RecordEntity, Long> {
+
+    // Paged query for finding NOT_COMPLETED records by bulkName
+    List<RecordEntity> findByBulknameAndStatus(String bulkName, String status, Pageable pageable);
+}
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import javax.transaction.Transactional;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+
+@Service
+@RequiredArgsConstructor
+public class ProcessingService {
+
+    private final RecordService recordService;
+    private final BulkService bulkService;
+    private final TestingService testingService;
+
+    @Autowired
+    private Executor taskExecutor; // Thread pool for async processing
+
+    @Transactional
+    public void processBulkRecords() {
+        Optional<BulkEntity> optionalBulk = bulkService.getTopNotCompletedBulk();
+        optionalBulk.ifPresentOrElse(this::processAllRecordsForBulkPaged, 
+            () -> { throw new RuntimeException("No unprocessed bulks found in the system."); });
+    }
+
+    // Process all records for the bulk in pages
+    private void processAllRecordsForBulkPaged(BulkEntity bulk) {
+        int pageSize = 100; // Customize this page size as per your requirements
+        int page = 0;
+        boolean hasMoreRecords = true;
+
+        while (hasMoreRecords) {
+            // Fetch the current page of records
+            List<RecordEntity> records = recordService.findNotCompletedRecordsPaged(bulk.getBulkname(), page, pageSize);
+            
+            if (records.isEmpty()) {
+                hasMoreRecords = false;
+            } else {
+                // Process each record asynchronously
+                records.forEach(record -> CompletableFuture.runAsync(() -> processRecord(record), taskExecutor));
+                page++;  // Move to the next page
+            }
+        }
+        
+        // Mark the bulk as completed after all records have been processed
+        bulkService.markBulkAsCompleted(bulk.getBulkname());
+    }
+
+    private void processRecord(RecordEntity record) {
+        String threadName = Thread.currentThread().getName();
+        String recordName = record.getRecordname();
+
+        System.out.println("Processing record: " + recordName + " on thread: " + threadName);
+
+        // Store the record name in the testing table
+        testingService.saveRecordName(recordName);
+
+        // Mark the record as completed
+        recordService.markRecordAsCompleted(record);
+    }
+}
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
+
+@Configuration
+public class AsyncConfig {
+
+    @Bean(name = "taskExecutor")
+    public Executor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10);           
+        executor.setMaxPoolSize(50);            
+        executor.setQueueCapacity(100);         
+        executor.setThreadNamePrefix("RecordProcessor-");
+
+        // Custom rejection policy
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy()); 
+        executor.initialize();
+        return executor;
+    }
+}
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import javax.transaction.Transactional;
+import java.util.Optional;
+import java.util.concurrent.Executor;
+
+@Service
+@RequiredArgsConstructor
+public class ProcessingService {
+
+    private final RecordService recordService;
+    private final BulkService bulkService;
+    private final TestingService testingService;
+
+    @Autowired
+    private Executor taskExecutor; // Inject the Executor for async processing
+
+    @Transactional
+    public void processRecord() {
+        // Step 1: Check for unprocessed bulks in the second table
+        Optional<BulkEntity> optionalBulk = bulkService.getTopNotCompletedBulk();
+
+        if (optionalBulk.isPresent()) {
+            // Process the found bulk
+            BulkEntity bulk = optionalBulk.get();
+            processBulk(bulk);
+        } else {
+            // Step 2: If no unprocessed bulks found, check for unprocessed records in the first table
+            Optional<RecordEntity> optionalRecord = recordService.getFirstMissingBulkRecord(bulkService.getAllBulkNames());
+
+            if (optionalRecord.isPresent()) {
+                RecordEntity record = optionalRecord.get();
+                String bulkName = record.getBulkname();
+
+                // Step 3: Check if the bulk name already exists in the bulk table
+                Optional<BulkEntity> existingBulk = bulkService.getBulkByName(bulkName);
+
+                if (existingBulk.isPresent()) {
+                    // Process the existing bulk record
+                    processBulk(existingBulk.get());
+                } else {
+                    // Step 4: If the bulk name does not exist, add it and process the record
+                    BulkEntity newBulk = bulkService.addMissingBulk(bulkName);
+                    processBulk(newBulk);
+                }
+            } else {
+                throw new RuntimeException("No unprocessed records found in the system.");
+            }
+        }
+    }
+
+    private void processBulk(BulkEntity bulk) {
+        // Step 5: Get the topmost NOT_COMPLETED record for this bulk
+        RecordEntity record = recordService.getTopNotCompletedRecord(bulk.getBulkname())
+                .orElseThrow(() -> new RuntimeException("No records found for bulkname: " + bulk.getBulkname()));
+
+        // Step 6: Store the recordname in the third table
+        testingService.saveRecordName(record.getRecordname());
+
+        // Step 7: Mark the record as completed
+        recordService.markRecordAsCompleted(record);
+
+        // Step 8: Check if no more NOT_COMPLETED records exist for this bulk, mark it as completed
+        if (recordService.areAllRecordsCompletedForBulk(bulk.getBulkname())) {
+            bulkService.markBulkAsCompleted(bulk.getBulkname());
+        } else {
+            // Step 9: If there are still records left for this bulk, check if the bulk should be marked as completed
+            bulkService.markBulkAsCompletedIfNoRecords(bulk.getBulkname());
+        }
+    }
+
+    @Async("taskExecutor")
+    public void asyncProcessRecord() {
+        processRecord();
+    }
+}
+```
+nvm the above last code
