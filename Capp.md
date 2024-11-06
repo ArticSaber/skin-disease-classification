@@ -1,171 +1,257 @@
-```
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.stereotype.Service;
+Understood. Even with indexing only on the `BatchStatusEntity` and `AnalysisEntity` tables, we can still optimize the processing logic. Here is the complete code for the service, repository, and entity classes, considering the constraints.
 
-import javax.transaction.Transactional;
+### Entities
+
+**BatchStatusEntity.java**
+```java
+import javax.persistence.*;
+
+@Entity
+public class BatchStatusEntity {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String batchName;
+
+    @Enumerated(EnumType.STRING)
+    private BatchStatus batchStatus;
+
+    // Getters and Setters
+}
+
+enum BatchStatus {
+    UNPROCESSED,
+    PROCESSED,
+    PROCESS_ERROR
+}
+```
+
+**RawDataEntity.java**
+```java
+import javax.persistence.*;
+
+@Entity
+public class RawDataEntity {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String tradeDate;
+    private String symbol;
+    private String securityName;
+    private String clientName;
+    private String buySell;
+    private int quantityTraded;
+    private double tradePrice;
+    private String remarks;
+    private String batchName;
+    private String recordStatus;
+
+    // Getters and Setters
+}
+```
+
+**AnalysisEntity.java**
+```java
+import javax.persistence.*;
+
+@Entity
+@IdClass(AnalysisEntityId.class)
+@Table(name = "analysis_entity", indexes = {
+    @Index(name = "idx_trade_date_symbol", columnList = "tradeDate, symbol")
+})
+public class AnalysisEntity {
+    @Id
+    private String tradeDate;
+
+    @Id
+    private String symbol;
+
+    private double tradePrice;
+    private Double previousEma;
+
+    // Getters and Setters
+}
+
+import java.io.Serializable;
+
+public class AnalysisEntityId implements Serializable {
+    private String tradeDate;
+    private String symbol;
+
+    // Getters, Setters, hashCode, equals
+}
+```
+
+### Repositories
+
+**BatchStatusRepository.java**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+
 import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
+
+public interface BatchStatusRepository extends JpaRepository<BatchStatusEntity, Long> {
+    BatchStatusEntity findByBatchName(String batchName);
+    List<BatchStatusEntity> findByBatchStatus(BatchStatus batchStatus);
+}
+```
+
+**RawDataRepository.java**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.List;
+
+public interface RawDataRepository extends JpaRepository<RawDataEntity, Long> {
+    @Query("SELECT r FROM RawDataEntity r WHERE r.batchName = :batchName AND r.recordStatus = :recordStatus ORDER BY r.id ASC")
+    List<RawDataEntity> findByBatchNameAndRecordStatus(@Param("batchName") String batchName, @Param("recordStatus") String recordStatus, @Param("limit") int limit, @Param("offset") int offset);
+
+    List<RawDataEntity> findByRecordStatus(String recordStatus);
+}
+```
+
+**AnalysisRepository.java**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface AnalysisRepository extends JpaRepository<AnalysisEntity, AnalysisEntityId> {
+    AnalysisEntity findByTradeDateAndSymbol(String tradeDate, String symbol);
+}
+```
+
+### Service
+
+**BatchProcessingService.java**
+```java
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.Collectors;
+import java.util.concurrent.RecursiveAction;
 
 @Service
-@RequiredArgsConstructor
-public class ProcessingService {
-
-    private final RecordService recordService;
-    private final BulkService bulkService;
-    private final TestingService testingService;
+public class BatchProcessingService {
 
     @Autowired
-    private Executor taskExecutor; // Inject the Executor for async processing
+    private BatchStatusRepository batchStatusRepository;
 
-    @Transactional
-    public void processRecord() {
-        Optional<BulkEntity> optionalBulk = bulkService.getTopNotCompletedBulk();
+    @Autowired
+    private RawDataRepository rawDataRepository;
 
-        if (optionalBulk.isPresent()) {
-            BulkEntity bulk = optionalBulk.get();
-            processBulkConcurrently(bulk); // Use multithreading for bulk processing
-        } else {
-            Optional<RecordEntity> optionalRecord = recordService.getFirstMissingBulkRecord(bulkService.getAllBulkNames());
+    @Autowired
+    private AnalysisRepository analysisRepository;
 
-            if (optionalRecord.isPresent()) {
-                RecordEntity record = optionalRecord.get();
-                String bulkName = record.getBulkname();
+    private final ForkJoinPool forkJoinPool = new ForkJoinPool();
 
-                Optional<BulkEntity> existingBulk = bulkService.getBulkByName(bulkName);
+    public void processBatches() {
+        List<BatchStatusEntity> unprocessedBatches = batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED);
 
-                if (existingBulk.isPresent()) {
-                    processBulkConcurrently(existingBulk.get());
-                } else {
-                    BulkEntity newBulk = bulkService.addMissingBulk(bulkName);
-                    processBulkConcurrently(newBulk);
+        if (unprocessedBatches.isEmpty()) {
+            List<RawDataEntity> unprocessedRecords = rawDataRepository.findByRecordStatus("UNPROCESSED");
+            for (RawDataEntity record : unprocessedRecords) {
+                if (batchStatusRepository.findByBatchName(record.getBatchName()) == null) {
+                    BatchStatusEntity newBatch = new BatchStatusEntity();
+                    newBatch.setBatchName(record.getBatchName());
+                    newBatch.setBatchStatus(BatchStatus.UNPROCESSED);
+                    batchStatusRepository.save(newBatch);
+                    unprocessedBatches.add(newBatch);
                 }
-            } else {
-                throw new RuntimeException("No unprocessed records found in the system.");
+            }
+        }
+
+        for (BatchStatusEntity batch : unprocessedBatches) {
+            forkJoinPool.submit(new BatchTask(batch));
+        }
+    }
+
+    private class BatchTask extends RecursiveAction {
+        private final BatchStatusEntity batch;
+        private static final int BATCH_SIZE = 1000;
+
+        public BatchTask(BatchStatusEntity batch) {
+            this.batch = batch;
+        }
+
+        @Override
+        protected void compute() {
+            try {
+                int offset = 0;
+                List<RawDataEntity> records;
+                do {
+                    records = rawDataRepository.findByBatchNameAndRecordStatus(batch.getBatchName(), "UNPROCESSED", BATCH_SIZE, offset);
+                    offset += BATCH_SIZE;
+                    processRecords(records);
+                } while (!records.isEmpty());
+
+                batch.setBatchStatus(BatchStatus.PROCESSED);
+            } catch (Exception e) {
+                batch.setBatchStatus(BatchStatus.PROCESS_ERROR);
+            } finally {
+                batchStatusRepository.save(batch);
+            }
+        }
+
+        @Transactional
+        private void processRecords(List<RawDataEntity> records) {
+            for (RawDataEntity record : records) {
+                AnalysisEntity analysis = analysisRepository.findByTradeDateAndSymbol(record.getTradeDate(), record.getSymbol());
+                if (analysis != null && analysis.getTradePrice() == record.getTradePrice()) {
+                    record.setRecordStatus("DUPLICATE");
+                } else {
+                    analysis = new AnalysisEntity();
+                    analysis.setTradeDate(record.getTradeDate());
+                    analysis.setSymbol(record.getSymbol());
+                    analysis.setTradePrice(record.getTradePrice());
+                    analysisRepository.save(analysis);
+                    record.setRecordStatus("PROCESSED");
+                }
+                rawDataRepository.save(record);
             }
         }
     }
-
-    private void processBulkConcurrently(BulkEntity bulk) {
-        List<RecordEntity> records = recordService.getAllNotCompletedRecords(bulk.getBulkname());
-
-        // ForkJoinPool for parallel processing of records in bulk
-        ForkJoinPool customThreadPool = new ForkJoinPool(Math.min(records.size(), 10)); // Limit to 10 threads or total record count
-        try {
-            customThreadPool.submit(() -> 
-                records.parallelStream()
-                    .map(record -> CompletableFuture.runAsync(() -> processRecord(record), taskExecutor))
-                    .collect(Collectors.toList())
-                    .forEach(CompletableFuture::join)
-            ).get();
-        } catch (Exception e) {
-            throw new RuntimeException("Error in processing bulk records concurrently", e);
-        } finally {
-            customThreadPool.shutdown();
-        }
-
-        // Mark bulk as completed if all records are processed
-        if (recordService.areAllRecordsCompletedForBulk(bulk.getBulkname())) {
-            bulkService.markBulkAsCompleted(bulk.getBulkname());
-        }
-    }
-
-    private void processRecord(RecordEntity record) {
-        testingService.saveRecordName(record.getRecordname());
-        recordService.markRecordAsCompleted(record);
-    }
-
-    @Async("taskExecutor")
-    public void asyncProcessRecord() {
-        processRecord();
-    }
 }
 ```
 
+### Controller
 
-
-
-
-
-
-_₹>#&#&÷*×()×?+?!:@>#;;#&₹(÷;÷[×738>4&4[=?=,=(=;₹&₹*₹,,₹&₹,₹₹&&₹&=<<=&=*÷(×[÷;÷&÷*÷*÷
-```
-import lombok.RequiredArgsConstructor;
+**BatchProcessingController.java**
+```java
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import javax.transaction.Transactional;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
-import java.util.stream.Collectors;
-
-@Service
-@RequiredArgsConstructor
-public class ProcessingService {
-
-    private final RecordService recordService;
-    private final BulkService bulkService;
-    private final TestingService testingService;
+@RestController
+public class BatchProcessingController {
 
     @Autowired
-    private Executor taskExecutor; // Injected taskExecutor for async processing
+    private BatchProcessingService batchProcessingService;
 
-    @Transactional
-    @Async("taskExecutor")
-    public void processBulkAsync() {
-        // Step 1: Fetch the top unprocessed bulk and initiate processing
-        Optional<BulkEntity> optionalBulk = bulkService.getTopNotCompletedBulk();
-        if (optionalBulk.isPresent()) {
-            BulkEntity bulk = optionalBulk.get();
-            processBulkRecordsConcurrently(bulk); // Process the bulk using ForkJoinPool
-        } else {
-            // Handle case where no bulks are available
-            throw new RuntimeException("No unprocessed bulks found.");
-        }
-    }
-
-    private void processBulkRecordsConcurrently(BulkEntity bulk) {
-        // Step 2: Fetch all NOT_COMPLETED records for this bulk
-        List<RecordEntity> records = recordService.getAllNotCompletedRecords(bulk.getBulkname());
-
-        // Use ForkJoinPool for concurrent record processing within the bulk
-        ForkJoinPool forkJoinPool = new ForkJoinPool(Math.min(records.size(), 10)); // Set concurrency limit
-        try {
-            forkJoinPool.submit(() -> 
-                records.parallelStream()
-                    .map(record -> CompletableFuture.runAsync(() -> processRecord(record), taskExecutor)) // Use CompletableFuture with taskExecutor for each record
-                    .collect(Collectors.toList())
-                    .forEach(CompletableFuture::join) // Wait for all records in the bulk to finish processing
-            ).get();
-        } catch (Exception e) {
-            throw new RuntimeException("Error processing bulk records concurrently", e);
-        } finally {
-            forkJoinPool.shutdown(); // Ensure ForkJoinPool is shut down after processing
-        }
-
-        // Step 4: Mark bulk as completed if all records are processed
-        if (recordService.areAllRecordsCompletedForBulk(bulk.getBulkname())) {
-            bulkService.markBulkAsCompleted(bulk.getBulkname());
-        }
-    }
-
-    private void processRecord(RecordEntity record) {
-        // Print thread ID and record name for debugging
-        long threadId = Thread.currentThread().getId();
-        System.out.println("Processing record: " + record.getRecordname() + " on Thread ID: " + threadId);
-
-        // Save the record name in the testing table and mark it as completed
-        testingService.saveRecordName(record.getRecordname());
-        recordService.markRecordAsCompleted(record);
+    @GetMapping("/process-batches")
+    public String processBatches() {
+        batchProcessingService.processBatches();
+        return "Batch processing started";
     }
 }
 ```
+
+### Indexing
+
+Ensure that the database has indexes on the following columns in the `BatchStatusEntity` and `AnalysisEntity` tables:
+
+**Example SQL Commands for Indexes**
+
+```sql
+-- Indexes for BatchStatusEntity table
+CREATE INDEX idx_batch_name ON batch_status_entity(batch_name);
+
+-- Indexes for AnalysisEntity table
+CREATE INDEX idx_trade_date_symbol ON analysis_entity(trade_date, symbol);
+```
+
+By implementing these optimizations, you can ensure efficient and ordered processing of records, even for large datasets. The code will work without indexes, but adding indexes will significantly improve performance, especially for large datasets.
