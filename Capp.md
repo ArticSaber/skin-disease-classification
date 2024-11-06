@@ -362,3 +362,44 @@ public class BatchProcessingService {
     }
 }
 ```
+```
+public void processBatches() {
+    List<BatchStatusEntity> unprocessedBatches = batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED);
+
+    if (unprocessedBatches.isEmpty()) {
+        // Retrieve distinct batch names with "UNPROCESSED" status
+        List<String> unprocessedBatchNames = rawDataRepository.findDistinctBatchNamesByRecordStatus("UNPROCESSED");
+        
+        for (String batchName : unprocessedBatchNames) {
+            // Check if the batch already exists in BatchStatus table
+            if (batchStatusRepository.findByBatchName(batchName) == null) {
+                // Create a new BatchStatusEntity if it does not exist
+                BatchStatusEntity newBatch = new BatchStatusEntity();
+                newBatch.setBatchName(batchName);
+                newBatch.setBatchStatus(BatchStatus.UNPROCESSED);
+                
+                // Add it to the unprocessed batch list
+                unprocessedBatches.add(newBatch);
+            }
+        }
+        
+        // Save all new batch entries in a single batch insert to optimize performance
+        batchStatusRepository.saveAll(unprocessedBatches);
+    }
+
+    // Process each batch asynchronously
+    for (BatchStatusEntity batch : unprocessedBatches) {
+        taskExecutor.execute(new BatchTask(batch));
+    }
+}
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface RawDataRepository extends JpaRepository<RawDataEntity, Long> {
+    
+    @Query("SELECT DISTINCT r.batchName FROM RawDataEntity r WHERE r.recordStatus = :status")
+    List<String> findDistinctBatchNamesByRecordStatus(@Param("status") String status);
+
+    List<RawDataEntity> findByRecordStatus(String recordStatus);
+}
+```
