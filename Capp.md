@@ -255,3 +255,110 @@ CREATE INDEX idx_trade_date_symbol ON analysis_entity(trade_date, symbol);
 ```
 
 By implementing these optimizations, you can ensure efficient and ordered processing of records, even for large datasets. The code will work without indexes, but adding indexes will significantly improve performance, especially for large datasets.
+
+
+```
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.RecursiveAction;
+
+@Service
+public class BatchProcessingService {
+
+    @Autowired
+    private BatchStatusRepository batchStatusRepository;
+
+    @Autowired
+    private RawDataRepository rawDataRepository;
+
+    @Autowired
+    private AnalysisRepository analysisRepository;
+
+    @Autowired
+    private Executor taskExecutor;
+
+    @Autowired
+    private ForkJoinPool forkJoinPool;
+
+    public void processBatches() {
+        List<BatchStatusEntity> unprocessedBatches = batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED);
+
+        if (unprocessedBatches.isEmpty()) {
+            List<RawDataEntity> unprocessedRecords = rawDataRepository.findByRecordStatus("UNPROCESSED");
+            for (RawDataEntity record : unprocessedRecords) {
+                if (batchStatusRepository.findByBatchName(record.getBatchName()) == null) {
+                    BatchStatusEntity newBatch = new BatchStatusEntity();
+                    newBatch.setBatchName(record.getBatchName());
+                    newBatch.setBatchStatus(BatchStatus.UNPROCESSED);
+                    batchStatusRepository.save(newBatch);
+                    unprocessedBatches.add(newBatch);
+                }
+            }
+        }
+
+        for (BatchStatusEntity batch : unprocessedBatches) {
+            taskExecutor.execute(new BatchTask(batch));
+        }
+    }
+
+    private class BatchTask implements Runnable {
+        private final BatchStatusEntity batch;
+        private static final int BATCH_SIZE = 1000;
+
+        public BatchTask(BatchStatusEntity batch) {
+            this.batch = batch;
+        }
+
+        @Override
+        public void run() {
+            try {
+                int offset = 0;
+                List<RawDataEntity> records;
+                do {
+                    records = rawDataRepository.findByBatchNameAndRecordStatus(batch.getBatchName(), "UNPROCESSED", BATCH_SIZE, offset);
+                    offset += BATCH_SIZE;
+                    forkJoinPool.invoke(new RecordProcessingTask(records));
+                } while (!records.isEmpty());
+
+                batch.setBatchStatus(BatchStatus.PROCESSED);
+            } catch (Exception e) {
+                batch.setBatchStatus(BatchStatus.PROCESS_ERROR);
+            } finally {
+                batchStatusRepository.save(batch);
+            }
+        }
+    }
+
+    private class RecordProcessingTask extends RecursiveAction {
+        private final List<RawDataEntity> records;
+
+        public RecordProcessingTask(List<RawDataEntity> records) {
+            this.records = records;
+        }
+
+        @Override
+        protected void compute() {
+            for (RawDataEntity record : records) {
+                AnalysisEntity analysis = analysisRepository.findByTradeDateAndSymbol(record.getTradeDate(), record.getSymbol());
+                if (analysis != null && analysis.getTradePrice() == record.getTradePrice()) {
+                    record.setRecordStatus("DUPLICATE");
+                } else {
+                    analysis = new AnalysisEntity();
+                    analysis.setTradeDate(record.getTradeDate());
+                    analysis.setSymbol(record.getSymbol());
+                    analysis.setTradePrice(record.getTradePrice());
+                    analysisRepository.save(analysis);
+                    record.setRecordStatus("PROCESSED");
+                }
+                rawDataRepository.save(record);
+            }
+        }
+    }
+}
+```
