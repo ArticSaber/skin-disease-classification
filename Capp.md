@@ -1086,3 +1086,196 @@ public class AsyncConfig implements AsyncConfigurer {
     }
 }
 ```
+
+## more faster af
+```
+@Component
+class AdaptiveBatchSizer {
+    private final int minSize;
+    private final int maxSize;
+    private int currentSize;
+    private long lastProcessingTime;
+    private final AtomicInteger successCount = new AtomicInteger();
+    private final AtomicInteger errorCount = new AtomicInteger();
+
+    public AdaptiveBatchSizer(int minSize, int maxSize) {
+        this.minSize = minSize;
+        this.maxSize = maxSize;
+        this.currentSize = minSize;
+    }
+
+    public void adjust() {
+        double errorRate = errorCount.get() / 
+            (double)(successCount.get() + errorCount.get());
+        
+        if (errorRate < 0.01) {
+            currentSize = Math.min(currentSize * 2, maxSize);
+        } else if (errorRate > 0.05) {
+            currentSize = Math.max(currentSize / 2, minSize);
+        }
+        
+        successCount.set(0);
+        errorCount.set(0);
+    }
+}
+```
+```
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class BatchProcessingService {
+    private static final int INITIAL_BATCH_SIZE = 5000;
+    private static final int MAX_BATCH_SIZE = 10000;
+    
+    private final BatchStatusRepository batchStatusRepository;
+    private final RawDataRepository rawDataRepository;
+    private final AnalysisRepository analysisRepository;
+    private final ThreadPoolTaskExecutor taskExecutor;
+    private final ForkJoinPool forkJoinPool;
+    private final JdbcTemplate jdbcTemplate;
+    private final ReactiveRedisTemplate<String, Object> redisTemplate;
+    
+    @Autowired
+    private CircuitBreakerFactory circuitBreakerFactory;
+
+    // Adaptive batch size tracker
+    private final AdaptiveBatchSizer batchSizer = new AdaptiveBatchSizer(
+        INITIAL_BATCH_SIZE, 
+        MAX_BATCH_SIZE
+    );
+
+    // Cache for analysis entities
+    private final Cache<AnalysisEntityId, AnalysisEntity> analysisCache = Caffeine.newBuilder()
+        .maximumSize(100_000)
+        .expireAfterWrite(5, TimeUnit.MINUTES)
+        .build();
+
+    @Async("taskExecutor")
+    public Mono<ProcessingSummary> processBatchesReactive() {
+        return Mono.defer(() -> {
+            StopWatch watch = new StopWatch();
+            watch.start();
+            
+            return createOrGetUnprocessedBatchesReactive()
+                .flatMapMany(Flux::fromIterable)
+                .parallel(Runtime.getRuntime().availableProcessors())
+                .runOn(Schedulers.boundedElastic())
+                .flatMap(this::processBatchReactive)
+                .sequential()
+                .collectList()
+                .map(results -> {
+                    watch.stop();
+                    ProcessingSummary summary = summarizeResults(results);
+                    log.info("Processing completed in {} ms", watch.getTotalTimeMillis());
+                    return summary;
+                });
+        });
+    }
+
+    private Mono<List<BatchStatusEntity>> createOrGetUnprocessedBatchesReactive() {
+        CircuitBreaker circuitBreaker = circuitBreakerFactory.create("unprocessed-batches");
+        
+        return Mono.fromSupplier(() -> 
+            circuitBreaker.run(
+                () -> batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED),
+                throwable -> handleBatchLoadingFailure(throwable)
+            ))
+            .flatMap(batches -> {
+                if (batches.isEmpty()) {
+                    return createNewBatchesReactive();
+                }
+                return Mono.just(batches);
+            });
+    }
+
+    private Mono<BatchResult> processBatchReactive(BatchStatusEntity batch) {
+        return Mono.defer(() -> {
+            BatchResult result = new BatchResult(batch.getBatchName());
+            StopWatch watch = new StopWatch();
+            watch.start();
+
+            return streamRecordsReactive(batch)
+                .buffer(batchSizer.getCurrentSize())
+                .flatMap(chunk -> processChunkReactive(chunk, result))
+                .then(Mono.defer(() -> updateBatchStatus(batch, result, watch)))
+                .thenReturn(result);
+        });
+    }
+
+    private Flux<RawDataEntity> streamRecordsReactive(BatchStatusEntity batch) {
+        return Flux.defer(() -> 
+            Flux.fromStream(() -> rawDataRepository.streamByBatchName(batch.getBatchName()))
+                .subscribeOn(Schedulers.boundedElastic()));
+    }
+
+    private Mono<Void> processChunkReactive(List<RawDataEntity> records, BatchResult result) {
+        return Mono.fromCallable(() -> {
+            List<AnalysisEntity> analysesToSave = new ArrayList<>();
+            List<RawDataEntity> recordsToUpdate = new ArrayList<>();
+
+            records.forEach(record -> 
+                processRecordWithCache(record, analysesToSave, recordsToUpdate, result));
+
+            return Tuples.of(analysesToSave, recordsToUpdate);
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap(tuple -> executeBatchUpdatesReactive(tuple.getT1(), tuple.getT2()));
+    }
+
+    private void processRecordWithCache(
+        RawDataEntity record, 
+        List<AnalysisEntity> analysesToSave,
+        List<RawDataEntity> recordsToUpdate,
+        BatchResult result
+    ) {
+        try {
+            AnalysisEntityId analysisId = new AnalysisEntityId(
+                record.getTradeDate(), 
+                record.getSymbol()
+            );
+            
+            AnalysisEntity analysis = analysisCache.get(analysisId, key -> 
+                analysisRepository.findById(key).orElse(null));
+
+            if (analysis != null && analysis.getTradePrice() == record.getTradePrice()) {
+                record.setRecordStatus("DUPLICATE");
+            } else {
+                analysis = new AnalysisEntity();
+                analysis.setId(analysisId);
+                analysis.setTradePrice(record.getTradePrice());
+                analysesToSave.add(analysis);
+                analysisCache.put(analysisId, analysis);
+                record.setRecordStatus("PROCESSED");
+            }
+            recordsToUpdate.add(record);
+            result.incrementProcessed();
+        } catch (Exception e) {
+            handleRecordError(record, recordsToUpdate, result, e);
+        }
+    }
+
+    private Mono<Void> executeBatchUpdatesReactive(
+        List<AnalysisEntity> analysesToSave,
+        List<RawDataEntity> recordsToUpdate
+    ) {
+        return Mono.defer(() -> {
+            List<Mono<Void>> operations = new ArrayList<>();
+            
+            if (!analysesToSave.isEmpty()) {
+                operations.add(executeBatchAnalysisUpdate(analysesToSave));
+            }
+            
+            if (!recordsToUpdate.isEmpty()) {
+                operations.add(executeBatchRecordUpdate(recordsToUpdate));
+            }
+            
+            return Mono.when(operations);
+        });
+    }
+
+    @Scheduled(fixedRate = 60000) // Every minute
+    public void adjustBatchSize() {
+        batchSizer.adjust();
+    }
+}
+```
