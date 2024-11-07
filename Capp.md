@@ -864,3 +864,225 @@ thread.pool.max-size=50
 thread.pool.queue-capacity=500
 fork.join.parallelism=4
 ```
+
+##type 2
+
+```
+# application.properties
+thread.pool.core-size=10
+thread.pool.max-size=50
+thread.pool.queue-capacity=500
+fork.join.parallelism=4
+```
+```
+// BatchProcessingService.java
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class BatchProcessingService {
+    private static final int BATCH_SIZE = 5000;
+    private static final int CHUNK_SIZE = 200;
+
+    private final BatchStatusRepository batchStatusRepository;
+    private final RawDataRepository rawDataRepository;
+    private final AnalysisRepository analysisRepository;
+    private final ThreadPoolTaskExecutor taskExecutor;
+    private final ForkJoinPool forkJoinPool;
+    private final JdbcTemplate jdbcTemplate;
+
+    private final AtomicInteger processedCount = new AtomicInteger(0);
+    private final AtomicInteger errorCount = new AtomicInteger(0);
+
+    @Async("taskExecutor")
+    public CompletableFuture<ProcessingSummary> processBatches() {
+        StopWatch watch = new StopWatch();
+        watch.start();
+        log.info("Starting batch processing");
+
+        try {
+            List<BatchStatusEntity> batches = createOrGetUnprocessedBatches();
+            List<CompletableFuture<BatchResult>> futures = batches.stream()
+                .map(batch -> CompletableFuture.supplyAsync(
+                    () -> processBatch(batch), 
+                    taskExecutor
+                ))
+                .collect(Collectors.toList());
+
+            return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> {
+                    watch.stop();
+                    ProcessingSummary summary = summarizeResults(futures);
+                    log.info("Batch processing completed in {} ms", watch.getTotalTimeMillis());
+                    return summary;
+                });
+        } catch (Exception e) {
+            log.error("Batch processing failed", e);
+            throw new BatchProcessingException("Failed to process batches", e);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    protected List<BatchStatusEntity> createOrGetUnprocessedBatches() {
+        List<BatchStatusEntity> unprocessedBatches = 
+            batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED);
+
+        if (unprocessedBatches.isEmpty()) {
+            try (Stream<RawDataEntity> stream = rawDataRepository.streamUnprocessedRecords()) {
+                Map<String, List<RawDataEntity>> recordsByBatch = stream
+                    .parallel()
+                    .collect(Collectors.groupingByConcurrent(RawDataEntity::getBatchName));
+
+                List<BatchStatusEntity> newBatches = recordsByBatch.keySet().stream()
+                    .map(this::createNewBatch)
+                    .collect(Collectors.toList());
+
+                return batchStatusRepository.saveAll(newBatches);
+            }
+        }
+        return unprocessedBatches;
+    }
+
+    @Transactional
+    protected BatchResult processBatch(BatchStatusEntity batch) {
+        BatchResult result = new BatchResult(batch.getBatchName());
+        StopWatch watch = new StopWatch();
+        watch.start();
+
+        try {
+            try (Stream<RawDataEntity> recordStream = 
+                rawDataRepository.streamByBatchName(batch.getBatchName())) {
+                
+                List<List<RawDataEntity>> chunks = StreamSupport
+                    .stream(Iterables.partition(recordStream::iterator, CHUNK_SIZE)
+                    .spliterator(), false)
+                    .collect(Collectors.toList());
+
+                forkJoinPool.submit(() -> 
+                    chunks.parallelStream().forEach(chunk -> 
+                        processChunk(chunk, result)))
+                    .get(30, TimeUnit.MINUTES);
+
+                batch.setBatchStatus(BatchStatus.PROCESSED);
+                batch.setProcessedCount(result.getProcessedCount());
+                batch.setErrorCount(result.getErrorCount());
+            }
+        } catch (Exception e) {
+            log.error("Failed to process batch: {}", batch.getBatchName(), e);
+            batch.setBatchStatus(BatchStatus.PROCESS_ERROR);
+            result.setFailed(true);
+            result.setError(e.getMessage());
+        } finally {
+            watch.stop();
+            log.info("Batch {} processed in {} ms", batch.getBatchName(), 
+                watch.getTotalTimeMillis());
+            batchStatusRepository.save(batch);
+        }
+        return result;
+    }
+
+    @Transactional
+    protected void processChunk(List<RawDataEntity> records, BatchResult result) {
+        List<AnalysisEntity> analysesToSave = new ArrayList<>();
+        List<RawDataEntity> recordsToUpdate = new ArrayList<>();
+
+        for (RawDataEntity record : records) {
+            try {
+                processRecord(record, analysesToSave, recordsToUpdate);
+                result.incrementProcessed();
+                processedCount.incrementAndGet();
+            } catch (Exception e) {
+                log.error("Error processing record: {}", record.getId(), e);
+                record.setRecordStatus("PROCESS_ERROR");
+                recordsToUpdate.add(record);
+                result.incrementErrors();
+                errorCount.incrementAndGet();
+            }
+        }
+
+        executeBatchUpdates(analysesToSave, recordsToUpdate);
+    }
+
+    private void executeBatchUpdates(
+        List<AnalysisEntity> analysesToSave, 
+        List<RawDataEntity> recordsToUpdate
+    ) {
+        if (!analysesToSave.isEmpty()) {
+            jdbcTemplate.batchUpdate(
+                "INSERT INTO analysis (trade_date, symbol, trade_price) VALUES (?,?,?)",
+                new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement ps, int i) throws SQLException {
+                        AnalysisEntity analysis = analysesToSave.get(i);
+                        ps.setDate(1, analysis.getTradeDate());
+                        ps.setString(2, analysis.getSymbol());
+                        ps.setBigDecimal(3, analysis.getTradePrice());
+                    }
+
+                    @Override
+                    public int getBatchSize() {
+                        return analysesToSave.size();
+                    }
+                }
+            );
+        }
+
+        if (!recordsToUpdate.isEmpty()) {
+            jdbcTemplate.batchUpdate(
+                "UPDATE raw_data SET status = ? WHERE id = ?",
+                new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement ps, int i) throws SQLException {
+                        RawDataEntity record = recordsToUpdate.get(i);
+                        ps.setString(1, record.getRecordStatus());
+                        ps.setLong(2, record.getId());
+                    }
+
+                    @Override
+                    public int getBatchSize() {
+                        return recordsToUpdate.size();
+                    }
+                }
+            );
+        }
+    }
+}
+```
+```
+// AsyncConfig.java
+@Configuration
+@EnableAsync
+public class AsyncConfig implements AsyncConfigurer {
+    @Value("${thread.pool.core-size:20}")
+    private int corePoolSize;
+    @Value("${thread.pool.max-size:100}")
+    private int maxPoolSize;
+    @Value("${thread.pool.queue-capacity:1000}")
+    private int queueCapacity;
+    @Value("${fork.join.parallelism:8}")
+    private int forkJoinParallelism;
+
+    @Bean(name = "taskExecutor")
+    public ThreadPoolTaskExecutor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
+        executor.setQueueCapacity(queueCapacity);
+        executor.setThreadNamePrefix("batch-processor-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean
+    public ForkJoinPool forkJoinPool() {
+        return new ForkJoinPool(forkJoinParallelism);
+    }
+
+    @Override
+    public Executor getAsyncExecutor() {
+        return taskExecutor();
+    }
+}
+```
