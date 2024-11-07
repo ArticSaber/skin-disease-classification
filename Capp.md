@@ -810,3 +810,57 @@ public class BatchProcessingService {
     }
 }
 ```
+```
+@Configuration
+@EnableAsync
+public class AsyncConfig implements AsyncConfigurer {
+
+    @Value("${thread.pool.core-size:10}")
+    private int corePoolSize;
+
+    @Value("${thread.pool.max-size:50}")
+    private int maxPoolSize;
+
+    @Value("${thread.pool.queue-capacity:500}")
+    private int queueCapacity;
+
+    @Value("${fork.join.parallelism:4}")
+    private int forkJoinParallelism;
+
+    @Bean(name = "taskExecutor")
+    public ThreadPoolTaskExecutor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
+        executor.setQueueCapacity(queueCapacity);
+        executor.setThreadNamePrefix("batch-processor-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean
+    public ForkJoinPool forkJoinPool() {
+        return new ForkJoinPool(forkJoinParallelism);
+    }
+
+    @Override
+    public Executor getAsyncExecutor() {
+        return taskExecutor();
+    }
+
+    @Override
+    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {
+        return new SimpleAsyncUncaughtExceptionHandler();
+    }
+}
+```
+```
+# application.properties
+thread.pool.core-size=10
+thread.pool.max-size=50
+thread.pool.queue-capacity=500
+fork.join.parallelism=4
+```
