@@ -525,3 +525,288 @@ public class BatchProcessingService {
     }
 }
 ```
+
+
+##claude
+
+```
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+
+@Service
+public class BatchProcessingService {
+    private static final int THRESHOLD = 100;
+    private static final int BATCH_SIZE = 1000;
+
+    @Autowired
+    private BatchStatusRepository batchStatusRepository;
+
+    @Autowired
+    private RawDataRepository rawDataRepository;
+
+    @Autowired
+    private AnalysisRepository analysisRepository;
+
+    @Autowired
+    private ThreadPoolTaskExecutor taskExecutor;
+
+    @Autowired
+    private ForkJoinPool forkJoinPool;
+
+    private final AtomicInteger processedCount = new AtomicInteger(0);
+    private final AtomicInteger errorCount = new AtomicInteger(0);
+
+    @Async("taskExecutor")
+    public CompletableFuture<ProcessingSummary> processBatches() {
+        List<BatchStatusEntity> unprocessedBatches = createOrGetUnprocessedBatches();
+        
+        List<CompletableFuture<BatchResult>> futures = unprocessedBatches.stream()
+            .map(batch -> CompletableFuture.supplyAsync(
+                () -> processBatch(batch), 
+                taskExecutor
+            ))
+            .collect(Collectors.toList());
+
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> summarizeResults(futures));
+    }
+
+    private List<BatchStatusEntity> createOrGetUnprocessedBatches() {
+        List<BatchStatusEntity> unprocessedBatches = 
+            batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED);
+
+        if (unprocessedBatches.isEmpty()) {
+            Map<String, List<RawDataEntity>> recordsByBatch = 
+                rawDataRepository.findByRecordStatus("UNPROCESSED")
+                    .parallelStream()
+                    .collect(Collectors.groupingBy(RawDataEntity::getBatchName));
+
+            List<BatchStatusEntity> newBatches = recordsByBatch.keySet().stream()
+                .filter(batchName -> batchStatusRepository.findByBatchName(batchName) == null)
+                .map(batchName -> {
+                    BatchStatusEntity batch = new BatchStatusEntity();
+                    batch.setBatchName(batchName);
+                    batch.setBatchStatus(BatchStatus.UNPROCESSED);
+                    return batch;
+                })
+                .collect(Collectors.toList());
+
+            if (!newBatches.isEmpty()) {
+                batchStatusRepository.saveAll(newBatches);
+                unprocessedBatches.addAll(newBatches);
+            }
+        }
+        return unprocessedBatches;
+    }
+
+    @Transactional
+    public BatchResult processBatch(BatchStatusEntity batch) {
+        BatchResult result = new BatchResult(batch.getBatchName());
+        try {
+            int pageNumber = 0;
+            Page<RawDataEntity> page;
+            do {
+                Pageable pageable = PageRequest.of(pageNumber, BATCH_SIZE);
+                page = rawDataRepository.findByBatchNameAndRecordStatus(
+                    batch.getBatchName(), 
+                    "UNPROCESSED", 
+                    pageable
+                );
+                
+                RecordProcessingTask task = new RecordProcessingTask(page.getContent());
+                forkJoinPool.invoke(task);
+                
+                result.addProcessed(task.getProcessedCount());
+                result.addErrors(task.getErrorCount());
+                
+                pageNumber++;
+            } while (page.hasNext());
+
+            batch.setBatchStatus(BatchStatus.PROCESSED);
+            batch.setProcessedCount(result.getProcessedCount());
+            batch.setErrorCount(result.getErrorCount());
+            
+        } catch (Exception e) {
+            batch.setBatchStatus(BatchStatus.PROCESS_ERROR);
+            result.setFailed(true);
+            result.setError(e.getMessage());
+        } finally {
+            batchStatusRepository.saveAndFlush(batch);
+        }
+        return result;
+    }
+
+    private class RecordProcessingTask extends RecursiveAction {
+        private final List<RawDataEntity> records;
+        private int processedCount = 0;
+        private int errorCount = 0;
+
+        public RecordProcessingTask(List<RawDataEntity> records) {
+            this.records = records;
+        }
+
+        @Override
+        protected void compute() {
+            if (records.size() <= THRESHOLD) {
+                processRecordBatch();
+            } else {
+                int mid = records.size() / 2;
+                RecordProcessingTask left = new RecordProcessingTask(
+                    records.subList(0, mid)
+                );
+                RecordProcessingTask right = new RecordProcessingTask(
+                    records.subList(mid, records.size())
+                );
+                invokeAll(left, right);
+                
+                processedCount = left.getProcessedCount() + right.getProcessedCount();
+                errorCount = left.getErrorCount() + right.getErrorCount();
+            }
+        }
+
+        @Transactional
+        private void processRecordBatch() {
+            List<AnalysisEntity> analysesToSave = new ArrayList<>();
+            List<RawDataEntity> recordsToUpdate = new ArrayList<>();
+
+            for (RawDataEntity record : records) {
+                try {
+                    processRecord(record, analysesToSave, recordsToUpdate);
+                    processedCount++;
+                } catch (Exception e) {
+                    handleRecordError(record, recordsToUpdate);
+                    errorCount++;
+                }
+            }
+
+            saveProcessedRecords(analysesToSave, recordsToUpdate);
+        }
+
+        private void processRecord(
+            RawDataEntity record, 
+            List<AnalysisEntity> analysesToSave,
+            List<RawDataEntity> recordsToUpdate
+        ) {
+            AnalysisEntityId analysisId = new AnalysisEntityId(
+                record.getTradeDate(), 
+                record.getSymbol()
+            );
+            
+            AnalysisEntity analysis = analysisRepository
+                .findById(analysisId)
+                .orElse(null);
+
+            if (analysis != null && analysis.getTradePrice() == record.getTradePrice()) {
+                record.setRecordStatus("DUPLICATE");
+            } else {
+                analysis = new AnalysisEntity();
+                analysis.setId(analysisId);
+                analysis.setTradePrice(record.getTradePrice());
+                analysesToSave.add(analysis);
+                record.setRecordStatus("PROCESSED");
+            }
+            recordsToUpdate.add(record);
+        }
+
+        private void handleRecordError(
+            RawDataEntity record,
+            List<RawDataEntity> recordsToUpdate
+        ) {
+            record.setRecordStatus("PROCESS_ERROR");
+            recordsToUpdate.add(record);
+        }
+
+        @Transactional
+        private void saveProcessedRecords(
+            List<AnalysisEntity> analysesToSave,
+            List<RawDataEntity> recordsToUpdate
+        ) {
+            if (!analysesToSave.isEmpty()) {
+                analysisRepository.saveAll(analysesToSave);
+            }
+            if (!recordsToUpdate.isEmpty()) {
+                rawDataRepository.saveAll(recordsToUpdate);
+            }
+        }
+
+        public int getProcessedCount() {
+            return processedCount;
+        }
+
+        public int getErrorCount() {
+            return errorCount;
+        }
+    }
+
+    @Getter
+    @AllArgsConstructor
+    public static class BatchResult {
+        private final String batchName;
+        private int processedCount = 0;
+        private int errorCount = 0;
+        private boolean failed = false;
+        private String error;
+
+        public void addProcessed(int count) {
+            this.processedCount += count;
+        }
+
+        public void addErrors(int count) {
+            this.errorCount += count;
+        }
+
+        public void setFailed(boolean failed) {
+            this.failed = failed;
+        }
+
+        public void setError(String error) {
+            this.error = error;
+        }
+    }
+
+    @Getter
+    public static class ProcessingSummary {
+        private final int totalProcessed;
+        private final int totalErrors;
+        private final List<BatchResult> batchResults;
+
+        public ProcessingSummary(List<BatchResult> results) {
+            this.batchResults = results;
+            this.totalProcessed = results.stream()
+                .mapToInt(BatchResult::getProcessedCount)
+                .sum();
+            this.totalErrors = results.stream()
+                .mapToInt(BatchResult::getErrorCount)
+                .sum();
+        }
+    }
+
+    private ProcessingSummary summarizeResults(
+        List<CompletableFuture<BatchResult>> futures
+    ) {
+        List<BatchResult> results = futures.stream()
+            .map(CompletableFuture::join)
+            .collect(Collectors.toList());
+        return new ProcessingSummary(results);
+    }
+
+    public int getProcessedCount() {
+        return processedCount.get();
+    }
+
+    public int getErrorCount() {
+        return errorCount.get();
+    }
+}
+```
