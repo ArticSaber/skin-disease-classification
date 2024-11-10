@@ -260,3 +260,138 @@ public class BatchProcessingService {
 }
 
 ```
+```
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+@Service
+public class BatchProcessingService {
+
+    @Autowired
+    private BatchStatusRepository batchStatusRepository;
+
+    @Autowired
+    private RawDataRepository rawDataRepository;
+
+    @Autowired
+    private AnalysisRepository analysisRepository;
+
+    @Autowired
+    private ThreadPoolTaskExecutor taskExecutor;
+
+    @Autowired
+    private ForkJoinPool forkJoinPool;
+
+    private AtomicInteger processedCount = new AtomicInteger(0);
+
+    private static final int PAGE_SIZE = 1000;
+
+    @Async("taskExecutor")
+    public void processBatches() {
+        List<BatchStatusEntity> unprocessedBatches = batchStatusRepository.findByBatchStatus(BatchStatus.UNPROCESSED);
+
+        if (unprocessedBatches.isEmpty()) {
+            List<RawDataEntity> unprocessedRecords = rawDataRepository.findByRecordStatus("UNPROCESSED");
+            for (RawDataEntity record : unprocessedRecords) {
+                if (batchStatusRepository.findByBatchName(record.getBatchName()) == null) {
+                    BatchStatusEntity newBatch = new BatchStatusEntity();
+                    newBatch.setBatchName(record.getBatchName());
+                    newBatch.setBatchStatus(BatchStatus.UNPROCESSED);
+                    batchStatusRepository.save(newBatch);
+                    unprocessedBatches.add(newBatch);
+                }
+            }
+        }
+
+        for (BatchStatusEntity batch : unprocessedBatches) {
+            taskExecutor.execute(() -> processBatch(batch));
+        }
+    }
+
+    @Transactional
+    public void processBatch(BatchStatusEntity batch) {
+        try {
+            int pageNumber = 0;
+            Page<RawDataEntity> page;
+            do {
+                Pageable pageable = PageRequest.of(pageNumber, PAGE_SIZE);
+                page = rawDataRepository.findByBatchNameAndRecordStatus(batch.getBatchName(), "UNPROCESSED", pageable);
+
+                // Process each page in parallel using ForkJoinPool
+                forkJoinPool.invoke(new RecordProcessingTask(page.getContent()));
+                pageNumber++;
+            } while (page.hasNext());
+
+            batch.setBatchStatus(BatchStatus.PROCESSED);
+        } catch (Exception e) {
+            batch.setBatchStatus(BatchStatus.PROCESS_ERROR);
+        } finally {
+            batchStatusRepository.saveAndFlush(batch);
+        }
+    }
+
+    // Define RecursiveAction for processing a batch of records in parallel
+    private class RecordProcessingTask extends RecursiveAction {
+        private final List<RawDataEntity> records;
+
+        public RecordProcessingTask(List<RawDataEntity> records) {
+            this.records = records;
+        }
+
+        @Override
+        @Transactional
+        protected void compute() {
+            // Process records in parallel
+            records.parallelStream().forEach(this::processRecord);
+        }
+
+        private void processRecord(RawDataEntity record) {
+            try {
+                AnalysisEntity analysis = fetchAnalysisForRecord(record);
+
+                if (analysis != null && analysis.getTradePrice().equals(record.getTradePrice())) {
+                    record.setRecordStatus("DUPLICATE");
+                } else {
+                    record.setRecordStatus("PROCESSED");
+                    saveNewAnalysisEntity(record);
+                }
+
+                rawDataRepository.saveAndFlush(record);
+
+                int count = processedCount.incrementAndGet();
+                System.out.println("Processed record number: " + count);
+            } catch (Exception e) {
+                record.setRecordStatus("PROCESS_ERROR");
+                rawDataRepository.saveAndFlush(record);
+            }
+        }
+    }
+
+    private AnalysisEntity fetchAnalysisForRecord(RawDataEntity record) {
+        AnalysisEntityId analysisId = new AnalysisEntityId(record.getTradeDate(), record.getSymbol());
+        return analysisRepository.findById(analysisId).orElse(null);
+    }
+
+    private void saveNewAnalysisEntity(RawDataEntity record) {
+        AnalysisEntityId analysisId = new AnalysisEntityId(record.getTradeDate(), record.getSymbol());
+        AnalysisEntity analysis = new AnalysisEntity();
+        analysis.setId(analysisId);
+        analysis.setTradePrice(record.getTradePrice());
+        analysisRepository.save(analysis);
+    }
+
+    public int getProcessedCount() {
+        return processedCount.get();
+    }
+}
+```
