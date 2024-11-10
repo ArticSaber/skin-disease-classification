@@ -591,3 +591,28 @@ public class BatchProcessingService {
     }
 }
 ```
+```
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        AnalysisEntityId that = (AnalysisEntityId) o;
+
+        if (!tradeDate.equals(that.tradeDate)) return false;
+        return symbol.equals(that.symbol);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = tradeDate.hashCode();
+        result = 31 * result + symbol.hashCode();
+        return result;
+    }
+}
+```
+
+```
+ @Query("SELECT a FROM AnalysisEntity a WHERE a.id.symbol IN :symbols AND a.id.tradeDate IN :tradeDates")
+    List<AnalysisEntity> findBySymbolInAndTradeDateIn(@Param("symbols") List<String> symbols, @Param("tradeDates") List<String> tradeDates);
+```
