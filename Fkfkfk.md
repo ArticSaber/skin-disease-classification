@@ -1,213 +1,122 @@
-Below is the full code with separate HTML files for the "Add Product" page and the "Product Table" page, along with a shared JavaScript file. When a product is added, the user is redirected to the "Products" page.
+Here's an updated version of the JavaScript and necessary additions for the "View" and "Edit" functionalities. The following changes have been made:
+
+Key Changes
+
+1. View Button: Opens a modal to show product details (ID, Image, Name, and Cost).
+
+
+2. Edit Button: Makes productName and productCost fields editable. Replaces the "Edit" button with "Save" and "Cancel".
+
+
+3. Save Button: Saves the updated product details to localStorage and refreshes the data.
+
+
+4. Cancel Button: Restores the previous state without saving changes.
+
+
 
 
 ---
 
-Directory Structure
+Updated Code
 
-project/
-│
-├── add-product.html
-├── product-table.html
-├── styles.css (optional)
-└── scripts.js
+HTML for Modal (Add in product-list-array-demo.html)
 
-
----
-
-1. Add Product Page (add-product.html)
-
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Add Product</title>
-  <link 
-    rel="stylesheet" 
-    href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
-  >
-</head>
-<body>
-  <div class="container mt-5">
-    <h2 class="mb-4">Add Product</h2>
-
-    <!-- Add Product Form -->
-    <form id="addProductForm">
-      <div class="form-row">
-        <div class="form-group col-md-4">
-          <input type="text" class="form-control" id="productName" placeholder="Product Name" required>
-        </div>
-        <div class="form-group col-md-4">
-          <input type="url" class="form-control" id="productUrl" placeholder="Product URL" required>
-        </div>
-        <div class="form-group col-md-2">
-          <input type="number" class="form-control" id="productPrice" placeholder="Product Price" required>
-        </div>
-        <button type="submit" class="btn btn-primary">Add Product</button>
+<!-- Modal -->
+<div class="modal fade" id="productModal" tabindex="-1" aria-labelledby="productModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="productModalLabel">Product Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-    </form>
+      <div class="modal-body">
+        <p><strong>ID:</strong> <span id="modalProductId"></span></p>
+        <p><strong>Name:</strong> <span id="modalProductName"></span></p>
+        <p><strong>Cost:</strong> <span id="modalProductCost"></span></p>
+        <p>
+          <strong>Image:</strong><br />
+          <img id="modalProductImage" src="" width="200" height="120" />
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
   </div>
+</div>
 
-  <script src="scripts.js"></script>
-</body>
-</html>
+Updated JavaScript in product.js
 
-
----
-
-2. Product Table Page (product-table.html)
-
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Product Table</title>
-  <link 
-    rel="stylesheet" 
-    href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
-  >
-</head>
-<body>
-  <div class="container mt-5">
-    <h2 class="mb-4">Product Table</h2>
-    <a href="add-product.html" class="btn btn-success mb-3">Add Product</a>
-
-    <!-- Product Table -->
-    <table class="table table-bordered" id="productTable">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>URL</th>
-          <th>Price</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        <!-- Dynamic Rows -->
-      </tbody>
-    </table>
-  </div>
-
-  <script src="scripts.js"></script>
-</body>
-</html>
-
-
----
-
-3. JavaScript File (scripts.js)
-
-// Simulating a simple local database
-const productKey = "productList";
-
-// Redirect from Add Product Form to Product Table
-if (document.getElementById("addProductForm")) {
-  document.getElementById("addProductForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-
-    const name = document.getElementById("productName").value;
-    const url = document.getElementById("productUrl").value;
-    const price = document.getElementById("productPrice").value;
-
-    const products = JSON.parse(localStorage.getItem(productKey)) || [];
-    const newProduct = {
-      id: products.length ? products[products.length - 1].id + 1 : 1,
-      name,
-      url,
-      price,
-    };
-
-    products.push(newProduct);
-    localStorage.setItem(productKey, JSON.stringify(products));
-
-    window.location.href = "product-table.html"; // Redirect to Product Table
-  });
+function loadData() {
+  let allProductsString = localStorage.getItem("allProducts");
+  if (allProductsString != null) {
+    allProducts = JSON.parse(allProductsString);
+    let content = "";
+    for (let eachProduct of allProducts) {
+      content += `<tr>
+                      <td>${eachProduct.id}</td>
+                      <td><img src="${eachProduct.productImageUrl}" width="80" height="50"></td>
+                      <td contenteditable="false" id="name-${eachProduct.id}">${eachProduct.productName}</td>
+                      <td contenteditable="false" id="cost-${eachProduct.id}">${eachProduct.productCost}</td>
+                      <td><button type="button" class="btn btn-warning" onclick="viewProduct(${eachProduct.id})">View</button></td>
+                      <td><button type="button" class="btn btn-primary" onclick="editProduct(${eachProduct.id})" id="edit-${eachProduct.id}">Edit</button></td>
+                      <td><button type="button" class="btn btn-danger" onclick="deleteProduct(${eachProduct.id})">Delete</button></td>
+                  </tr>`;
+    }
+    document.getElementById("data").innerHTML = content;
+  } else {
+    document.getElementById("message").innerHTML = "No Products to display!";
+  }
 }
 
-// Render Product Table
-if (document.querySelector("#productTable")) {
-  const products = JSON.parse(localStorage.getItem(productKey)) || [];
-  renderProducts(products);
+function viewProduct(id) {
+  let product = allProducts.find((eachProduct) => eachProduct.id == id);
 
-  function renderProducts(productList) {
-    const tableBody = document.querySelector("#productTable tbody");
-    tableBody.innerHTML = "";
+  // Populate modal with product data
+  document.getElementById("modalProductId").innerText = product.id;
+  document.getElementById("modalProductName").innerText = product.productName;
+  document.getElementById("modalProductCost").innerText = product.productCost;
+  document.getElementById("modalProductImage").src = product.productImageUrl;
 
-    productList.forEach((product) => {
-      const row = document.createElement("tr");
+  // Show the modal
+  let productModal = new bootstrap.Modal(document.getElementById("productModal"));
+  productModal.show();
+}
 
-      row.innerHTML = `
-        <td>${product.id}</td>
-        <td contenteditable="false">${product.name}</td>
-        <td contenteditable="false">${product.url}</td>
-        <td contenteditable="false">${product.price}</td>
-        <td>
-          <button class="btn btn-sm btn-warning edit-btn">Edit</button>
-          <button class="btn btn-sm btn-success save-btn d-none">Save</button>
-          <button class="btn btn-sm btn-secondary cancel-btn d-none">Cancel</button>
-          <button class="btn btn-sm btn-info view-btn">View</button>
-          <button class="btn btn-sm btn-danger delete-btn">Delete</button>
-        </td>
-      `;
+function editProduct(id) {
+  // Make fields editable
+  document.getElementById(`name-${id}`).contentEditable = "true";
+  document.getElementById(`cost-${id}`).contentEditable = "true";
 
-      // Action Button Event Listeners
-      row.querySelector(".edit-btn").addEventListener("click", () => toggleEdit(row, true));
-      row.querySelector(".save-btn").addEventListener("click", () => saveEdit(row, product.id));
-      row.querySelector(".cancel-btn").addEventListener("click", () => toggleEdit(row, false));
-      row.querySelector(".view-btn").addEventListener("click", () => viewProduct(product));
-      row.querySelector(".delete-btn").addEventListener("click", () => deleteProduct(product.id, row));
+  // Change "Edit" button to "Save" and "Cancel"
+  let editButton = document.getElementById(`edit-${id}`);
+  editButton.outerHTML = `
+    <button type="button" class="btn btn-success" onclick="saveProduct(${id})" id="save-${id}">Save</button>
+    <button type="button" class="btn btn-secondary" onclick="cancelEdit(${id})" id="cancel-${id}">Cancel</button>
+  `;
+}
 
-      tableBody.appendChild(row);
-    });
-  }
+function saveProduct(id) {
+  // Save updated values
+  let updatedName = document.getElementById(`name-${id}`).innerText;
+  let updatedCost = document.getElementById(`cost-${id}`).innerText;
 
-  // Toggle Edit Mode
-  function toggleEdit(row, isEditing) {
-    const cells = row.querySelectorAll("td[contenteditable]");
-    const editBtn = row.querySelector(".edit-btn");
-    const saveBtn = row.querySelector(".save-btn");
-    const cancelBtn = row.querySelector(".cancel-btn");
+  // Update product in the array
+  let productIndex = allProducts.findIndex((eachProduct) => eachProduct.id == id);
+  allProducts[productIndex].productName = updatedName;
+  allProducts[productIndex].productCost = updatedCost;
 
-    cells.forEach((cell) => (cell.contentEditable = isEditing));
-    editBtn.classList.toggle("d-none", isEditing);
-    saveBtn.classList.toggle("d-none", !isEditing);
-    cancelBtn.classList.toggle("d-none", !isEditing);
-  }
+  // Save to localStorage
+  localStorage.setItem("allProducts", JSON.stringify(allProducts));
 
-  // Save Edited Product
-  function saveEdit(row, productId) {
-    const products = JSON.parse(localStorage.getItem(productKey));
-    const product = products.find((p) => p.id === productId);
-    const cells = row.querySelectorAll("td[contenteditable]");
-    product.name = cells[0].textContent.trim();
-    product.url = cells[1].textContent.trim();
-    product.price = cells[2].textContent.trim();
-    localStorage.setItem(productKey, JSON.stringify(products));
-    toggleEdit(row, false);
-  }
+  // Reload data
+  loadData();
+}
 
-  // Delete Product
-  function deleteProduct(productId, row) {
-    const products = JSON.parse(localStorage.getItem(productKey));
-    const updatedProducts = products.filter((product) => product.id !== productId);
-    localStorage.setItem(productKey, JSON.stringify(updatedProducts));
-    row.remove();
-  }
-
-  // View Product Details
-  function viewProduct(product) {
-    const details = `
-      Product Details:
-      ID: ${product.id}
-      Name: ${product.name}
-      URL: ${product.url}
-      Price: ${product.price}
-    `;
-    alert(details);
-  }
+function cancelEdit(id) {
+  // Reload data without saving
+  loadData();
 }
 
 
@@ -215,28 +124,32 @@ if (document.querySelector("#productTable")) {
 
 How It Works
 
-1. Add Product Page:
+1. View Product:
 
-Enter product details.
-
-On form submission, the product is added to localStorage and redirects to the Product Table page.
+Clicking "View" opens a modal displaying product details.
 
 
 
-2. Product Table Page:
+2. Edit Product:
 
-Loads the product list from localStorage.
+Clicking "Edit" makes the Name and Cost fields editable.
 
-Enables edit, save, cancel, view, and delete functionalities for each product.
-
-
-
-3. LocalStorage:
-
-Products are stored in the browser’s localStorage under the key productList.
+Displays "Save" and "Cancel" buttons.
 
 
 
+3. Save Changes:
 
-This setup ensures a clean separation between pages and functionality while leveraging localStorage for simple data persistence.
+Updates the product in the array and persists it to localStorage.
+
+
+
+4. Cancel Edit:
+
+Reloads the table without saving any changes.
+
+
+
+
+Let me know if you need further assistance!
 
