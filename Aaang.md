@@ -274,3 +274,537 @@ Key Changes for Angular 18+
 
 Let me know if you need further assistance!
 
+
+
+
+
+
+
+
+
+
+
+82>÷<>=^=*×>[2;÷[÷<÷8>4^484&4>=&>=<=73>4&==&=&
+
+
+
+Here's a full implementation to set up protected routes in Angular 18. Since your cookies are already stored directly in the cookie storage by the backend, we will use those cookies for validation, role-based access control, and logout functionality.
+
+
+---
+
+Folder Structure
+
+app/
+|-- core/
+|   |-- auth/
+|   |   |-- login/
+|   |   |   |-- interfaces/
+|   |   |   |   |-- user.interface.ts
+|   |   |   |-- pages/
+|   |   |   |   |-- login-page.component.ts
+|   |   |   |   |-- login-page.component.html
+|   |   |   |-- login.guard.ts
+|   |   |   |-- admin.guard.ts
+|   |   |   |-- login.service.ts
+|   |-- dashboard/
+|   |   |-- admin-dashboard.component.ts
+|   |   |-- user-dashboard.component.ts
+app.routes.ts
+main.ts
+
+
+---
+
+Code
+
+1. Interfaces
+
+user.interface.ts:
+
+export interface User {
+  email: string;
+  password: string;
+}
+
+export interface ApiResponse {
+  success: boolean;
+  message: string;
+  role?: string; // 'admin' or 'user'
+}
+
+
+---
+
+2. Guards
+
+login.guard.ts:
+
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { LoginService } from './login.service';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class LoginGuard implements CanActivate {
+  constructor(private loginService: LoginService, private router: Router) {}
+
+  canActivate(): boolean {
+    if (this.loginService.isLoggedIn()) {
+      return true;
+    }
+    this.router.navigate(['/login']); // Redirect to login page if not logged in
+    return false;
+  }
+}
+
+admin.guard.ts:
+
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { LoginService } from './login.service';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class AdminGuard implements CanActivate {
+  constructor(private loginService: LoginService, private router: Router) {}
+
+  canActivate(): boolean {
+    const role = this.loginService.getRole();
+    if (role === 'admin') {
+      return true;
+    }
+    this.router.navigate(['/dashboard']); // Redirect non-admin users to the dashboard
+    return false;
+  }
+}
+
+
+---
+
+3. Login Service
+
+login.service.ts:
+
+import { Injectable } from '@angular/core';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class LoginService {
+  isLoggedIn(): boolean {
+    const token = this.getCookie('jwt');
+    return !!token; // Return true if JWT exists
+  }
+
+  getRole(): string | null {
+    const role = this.getCookie('role');
+    return role; // Return the role (admin or user)
+  }
+
+  logout(): void {
+    document.cookie = 'jwt=; Max-Age=0;'; // Clear JWT cookie
+    document.cookie = 'role=; Max-Age=0;'; // Clear role cookie
+  }
+
+  private getCookie(name: string): string | null {
+    const matches = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return matches ? decodeURIComponent(matches[1]) : null;
+  }
+}
+
+
+---
+
+4. Login Page
+
+login-page.component.ts:
+
+import { Component } from '@angular/core';
+import { Router } from '@angular/router';
+
+@Component({
+  selector: 'app-login-page',
+  templateUrl: './login-page.component.html',
+})
+export class LoginPageComponent {
+  email = '';
+  password = '';
+
+  constructor(private router: Router) {}
+
+  login() {
+    // Assume cookie is set by backend after successful login
+    if (this.email === 'admin@example.com' && this.password === 'admin') {
+      document.cookie = 'jwt=token; path=/;';
+      document.cookie = 'role=admin; path=/;';
+      this.router.navigate(['/admin']); // Redirect to admin dashboard
+    } else if (this.email === 'user@example.com' && this.password === 'user') {
+      document.cookie = 'jwt=token; path=/;';
+      document.cookie = 'role=user; path=/;';
+      this.router.navigate(['/dashboard']); // Redirect to user dashboard
+    } else {
+      alert('Invalid credentials');
+    }
+  }
+}
+
+login-page.component.html:
+
+<div>
+  <h2>Login</h2>
+  <form (ngSubmit)="login()">
+    <input type="email" [(ngModel)]="email" name="email" required placeholder="Email">
+    <input type="password" [(ngModel)]="password" name="password" required placeholder="Password">
+    <button type="submit">Login</button>
+  </form>
+</div>
+
+
+---
+
+5. Dashboard Components
+
+admin-dashboard.component.ts:
+
+import { Component } from '@angular/core';
+import { LoginService } from '../auth/login/login.service';
+
+@Component({
+  selector: 'app-admin-dashboard',
+  template: `<h2>Admin Dashboard</h2> <button (click)="logout()">Logout</button>`,
+})
+export class AdminDashboardComponent {
+  constructor(private loginService: LoginService) {}
+
+  logout() {
+    this.loginService.logout();
+    location.reload(); // Reload to redirect to login
+  }
+}
+
+user-dashboard.component.ts:
+
+import { Component } from '@angular/core';
+import { LoginService } from '../auth/login/login.service';
+
+@Component({
+  selector: 'app-user-dashboard',
+  template: `<h2>User Dashboard</h2> <button (click)="logout()">Logout</button>`,
+})
+export class UserDashboardComponent {
+  constructor(private loginService: LoginService) {}
+
+  logout() {
+    this.loginService.logout();
+    location.reload(); // Reload to redirect to login
+  }
+}
+
+
+---
+
+6. Routes
+
+app.routes.ts:
+
+import { LoginPageComponent } from './core/auth/login/pages/login-page.component';
+import { UserDashboardComponent } from './core/dashboard/user-dashboard.component';
+import { AdminDashboardComponent } from './core/dashboard/admin-dashboard.component';
+import { LoginGuard } from './core/auth/login/login.guard';
+import { AdminGuard } from './core/auth/login/admin.guard';
+
+export const APP_ROUTES = [
+  { path: 'login', component: LoginPageComponent },
+  { path: 'dashboard', component: UserDashboardComponent, canActivate: [LoginGuard] },
+  { path: 'admin', component: AdminDashboardComponent, canActivate: [LoginGuard, AdminGuard] },
+  { path: '', redirectTo: 'login', pathMatch: 'full' },
+  { path: '**', redirectTo: 'login' },
+];
+
+
+---
+
+7. Main Bootstrap
+
+main.ts:
+
+import { bootstrapApplication } from '@angular/platform-browser';
+import { provideHttpClient } from '@angular/common/http';
+import { provideRouter } from '@angular/router';
+import { APP_ROUTES } from './app.routes';
+
+bootstrapApplication(LoginPageComponent, {
+  providers: [provideHttpClient(), provideRouter(APP_ROUTES)],
+});
+
+
+---
+
+How It Works
+
+1. Login Logic:
+
+The backend sets JWT and role cookies on successful login.
+
+
+
+2. Guards:
+
+LoginGuard: Ensures only logged-in users access protected routes.
+
+AdminGuard: Ensures only admin users access admin routes.
+
+
+
+3. Routing:
+
+/login: Login page (open to everyone).
+
+/dashboard: Protected route for regular users.
+
+/admin: Protected route for admins only.
+
+
+
+4. Logout:
+
+Clears cookies and reloads the page to redirect to login.
+
+
+
+
+Let me know if you need further clarification!
+
+
+
+
+irhdufuf8ri4h3ieuheyey548382929iwvejsbgdue99202 ou g bri go 4
+If your JWT contains both the user ID and role information, we can decode the JWT directly in the Angular application using a library like jwt-decode. Here’s how you can adapt the auth service to decode the JWT and extract the role.
+
+
+---
+
+Update Auth Service
+
+Install jwt-decode:
+
+Run the following command to install the jwt-decode library:
+
+npm install jwt-decode
+
+
+---
+
+Updated login.service.ts:
+
+import { Injectable } from '@angular/core';
+import jwt_decode from 'jwt-decode';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class LoginService {
+  private jwtCookieName = 'jwt';
+
+  isLoggedIn(): boolean {
+    const token = this.getCookie(this.jwtCookieName);
+    return !!token; // Return true if JWT exists
+  }
+
+  getRole(): string | null {
+    const token = this.getCookie(this.jwtCookieName);
+    if (token) {
+      try {
+        const decodedToken = jwt_decode<{ role: string }>(token);
+        return decodedToken.role; // Extract role from decoded token
+      } catch (error) {
+        console.error('Error decoding JWT:', error);
+        return null;
+      }
+    }
+    return null;
+  }
+
+  logout(): void {
+    document.cookie = `${this.jwtCookieName}=; Max-Age=0;`; // Clear JWT cookie
+  }
+
+  private getCookie(name: string): string | null {
+    const matches = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return matches ? decodeURIComponent(matches[1]) : null;
+  }
+}
+
+
+---
+
+How It Works
+
+1. Decoding the JWT:
+
+The jwt-decode library decodes the JWT payload (base64).
+
+In this case, the payload should include a role field.
+
+
+
+2. Role Retrieval:
+
+The getRole() method decodes the JWT stored in the cookies and extracts the role field (e.g., admin, user).
+
+
+
+3. Logout:
+
+The logout() method clears the JWT cookie, effectively logging the user out.
+
+
+
+4. Error Handling:
+
+If the JWT cannot be decoded (e.g., it is malformed), the service logs the error and returns null.
+
+
+
+
+
+---
+
+Update Guards
+
+**`login
+
+Here’s how you can update the guards to use the decoded JWT role information from the updated LoginService:
+
+
+---
+
+Updated Guards
+
+login.guard.ts (Protects routes for logged-in users):
+
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { LoginService } from './login.service';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class LoginGuard implements CanActivate {
+  constructor(private loginService: LoginService, private router: Router) {}
+
+  canActivate(): boolean {
+    if (this.loginService.isLoggedIn()) {
+      return true;
+    }
+    this.router.navigate(['/login']); // Redirect to login if not authenticated
+    return false;
+  }
+}
+
+
+---
+
+admin.guard.ts (Restricts access to admin-only routes):
+
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { LoginService } from './login.service';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class AdminGuard implements CanActivate {
+  constructor(private loginService: LoginService, private router: Router) {}
+
+  canActivate(): boolean {
+    const role = this.loginService.getRole();
+    if (role === 'admin') {
+      return true;
+    }
+    this.router.navigate(['/dashboard']); // Redirect non-admin users to their dashboard
+    return false;
+  }
+}
+
+
+---
+
+Update Routes
+
+With the updated guards in place, the app.routes.ts file will ensure proper access control.
+
+app.routes.ts:
+
+import { LoginPageComponent } from './core/auth/login/pages/login-page.component';
+import { UserDashboardComponent } from './core/dashboard/user-dashboard.component';
+import { AdminDashboardComponent } from './core/dashboard/admin-dashboard.component';
+import { LoginGuard } from './core/auth/login/login.guard';
+import { AdminGuard } from './core/auth/login/admin.guard';
+
+export const APP_ROUTES = [
+  { path: 'login', component: LoginPageComponent },
+  { path: 'dashboard', component: UserDashboardComponent, canActivate: [LoginGuard] },
+  { path: 'admin', component: AdminDashboardComponent, canActivate: [LoginGuard, AdminGuard] },
+  { path: '', redirectTo: 'login', pathMatch: 'full' },
+  { path: '**', redirectTo: 'login' },
+];
+
+
+---
+
+How It Works
+
+1. LoginGuard:
+
+Ensures that the user is logged in by checking the presence of the JWT in cookies.
+
+If not logged in, redirects to the /login route.
+
+
+
+2. AdminGuard:
+
+Uses the decoded JWT to check if the user has the admin role.
+
+If the role is not admin, redirects to the /dashboard.
+
+
+
+3. Routing:
+
+/login: Open to everyone.
+
+/dashboard: Protected for logged-in users.
+
+/admin: Accessible only to users with the admin role.
+
+
+
+
+
+---
+
+Final Notes
+
+JWT Payload Format: Ensure that your backend includes the role field in the JWT payload, e.g.:
+
+{
+  "sub": "userId",
+  "role": "admin",
+  "exp": 1718928000
+}
+
+Token Expiry Handling: If your JWT includes an expiration (exp) field, you can enhance the isLoggedIn() method to check whether the token is expired:
+
+const decoded = jwt_decode<{ exp: number }>(token);
+const isExpired = decoded.exp * 1000 < Date.now(); // JWT expiration is in seconds
+return !isExpired;
+
+
+Let me know if you need additional functionality or further clarification!
+
+
