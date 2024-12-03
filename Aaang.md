@@ -807,4 +807,230 @@ return !isExpired;
 
 Let me know if you need additional functionality or further clarification!
 
+4678y u hhcfhjooo9887766554wwwdxcvbbnnmkugyui99987765433s c hhjiii
+
+
+Here’s how to modify the setup based on your token structure and requirements:
+
+
+---
+
+Steps to Retrieve Roles and Implement Guards
+
+1. Update LoginService to Decode Roles
+
+Since your token has a roles array with objects like { authority: "ADMIN" }, we will update the LoginService to decode the token and extract the role.
+
+Updated login.service.ts:
+
+import { Injectable } from '@angular/core';
+import jwt_decode from 'jwt-decode';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class LoginService {
+  private tokenName = 'bearertoken'; // Your token name
+
+  isLoggedIn(): boolean {
+    return !!this.getToken(); // Return true if token exists
+  }
+
+  getToken(): string | null {
+    const matches = document.cookie.match(new RegExp(`(?:^|; )${this.tokenName}=([^;]*)`));
+    return matches ? decodeURIComponent(matches[1]) : null;
+  }
+
+  getRole(): string | null {
+    const token = this.getToken();
+    if (token) {
+      try {
+        const decoded = jwt_decode<{ roles: { authority: string }[] }>(token);
+        if (decoded.roles && decoded.roles.length > 0) {
+          return decoded.roles[0].authority; // Return the first role's authority
+        }
+      } catch (error) {
+        console.error('Error decoding JWT:', error);
+      }
+    }
+    return null; // Return null if no role found or token is invalid
+  }
+
+  logout(): void {
+    document.cookie = `${this.tokenName}=; Max-Age=0;`; // Clear token
+  }
+}
+
+
+---
+
+2. Update the Auth Guard
+
+Now, let’s implement the logic to handle redirection based on:
+
+Whether the token exists.
+
+The user’s role.
+
+
+Updated login.guard.ts:
+
+import { Injectable } from '@angular/core';
+import { CanActivate, Router } from '@angular/router';
+import { LoginService } from './core/auth/login/login.service';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class AuthGuard implements CanActivate {
+  constructor(private loginService: LoginService, private router: Router) {}
+
+  canActivate(): boolean {
+    const token = this.loginService.getToken();
+
+    if (!token) {
+      this.router.navigate(['/login']); // Redirect to login if no token
+      return false;
+    }
+
+    const role = this.loginService.getRole();
+
+    if (role === 'ADMIN') {
+      this.router.navigate(['/admin/dashboard']); // Redirect to admin dashboard
+    } else if (role === 'USER') {
+      this.router.navigate(['/user/dashboard']); // Redirect to user dashboard
+    } else {
+      this.router.navigate(['/login']); // Redirect to login if role is invalid
+    }
+
+    return false; // Prevent navigation to the requested route
+  }
+}
+
+
+---
+
+3. Update Routes
+
+We will now define proper paths for /admin/dashboard and /user/dashboard.
+
+Updated app.routes.ts:
+
+import { LoginPageComponent } from './core/auth/login/pages/login-page.component';
+import { UserDashboardComponent } from './core/dashboard/user-dashboard.component';
+import { AdminDashboardComponent } from './core/dashboard/admin-dashboard.component';
+import { AuthGuard } from './core/auth/login/login.guard';
+
+export const APP_ROUTES = [
+  { path: 'login', component: LoginPageComponent },
+  { path: 'admin/dashboard', component: AdminDashboardComponent, canActivate: [AuthGuard] },
+  { path: 'user/dashboard', component: UserDashboardComponent, canActivate: [AuthGuard] },
+  { path: '', redirectTo: 'login', pathMatch: 'full' },
+  { path: '**', redirectTo: 'login' },
+];
+
+
+---
+
+Interceptor for Adding Token
+
+To automatically include the token in outgoing HTTP requests, you can use an interceptor.
+
+Updated auth.interceptor.ts:
+
+import { Injectable } from '@angular/core';
+import { HttpInterceptor, HttpRequest, HttpHandler, HttpEvent, HttpErrorResponse } from '@angular/common/http';
+import { Observable, throwError } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+import { LoginService } from './core/auth/login/login.service';
+import { Router } from '@angular/router';
+
+@Injectable()
+export class AuthInterceptor implements HttpInterceptor {
+  constructor(private loginService: LoginService, private router: Router) {}
+
+  intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
+    const token = this.loginService.getToken();
+
+    // Clone request and add Authorization header if token exists
+    const authReq = token
+      ? req.clone({ headers: req.headers.set('Authorization', `Bearer ${token}`) })
+      : req;
+
+    return next.handle(authReq).pipe(
+      catchError((error: HttpErrorResponse) => {
+        if (error.status === 401) {
+          // Unauthorized access: redirect to login
+          this.loginService.logout();
+          this.router.navigate(['/login']);
+        }
+        return throwError(() => error);
+      })
+    );
+  }
+}
+
+
+---
+
+Updates to main.ts
+
+Include the interceptor and updated guards.
+
+main.ts:
+
+import { bootstrapApplication } from '@angular/platform-browser';
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { provideRouter } from '@angular/router';
+import { APP_ROUTES } from './app.routes';
+import { AuthInterceptor } from './auth.interceptor';
+
+bootstrapApplication(AppComponent, {
+  providers: [
+    provideHttpClient(withInterceptors([AuthInterceptor])),
+    provideRouter(APP_ROUTES),
+  ],
+});
+
+
+---
+
+Final Folder Structure
+
+Here’s your updated folder structure:
+
+app/
+├── core/
+│   ├── auth/
+│   │   ├── login/
+│   │   │   ├── login.guard.ts
+│   │   │   ├── login.service.ts
+│   │   │   ├── pages/
+│   │   │   │   └── login-page.component.ts
+│   │   │   ├── interfaces/
+│   │   │   ├── types/
+│   │   │   └── login.module.ts
+│   │   ├── auth.interceptor.ts
+│   ├── dashboard/
+│       ├── user-dashboard.component.ts
+│       └── admin-dashboard.component.ts
+├── app.routes.ts
+├── app.component.ts
+├── main.ts
+
+
+---
+
+Flow Summary
+
+1. Interceptor:
+
+Automatically adds the JWT token to requests.
+
+Redirects to /login on 401 errors.
+
+
+
+2. 
+
 
