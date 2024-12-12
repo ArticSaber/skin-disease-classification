@@ -1034,3 +1034,138 @@ Redirects to /login on 401 errors.
 2. 
 
 
+8484838398393939ejjrhfurjjekejsbdbdhdujrbehrhrurue8ei3jejrr
+
+
+
+To connect to a WebSocket in Angular and manage the connection lifecycle (onInit to establish the connection and onDestroy to terminate it), follow these steps:
+
+Steps to Implement:
+
+1. Create a WebSocket service for reusable and maintainable WebSocket connection logic.
+
+
+2. Use ngOnInit in your component to subscribe to WebSocket events.
+
+
+3. Use ngOnDestroy to close the WebSocket connection.
+
+
+
+Example Implementation:
+
+1. WebSocket Service
+
+import { Injectable } from '@angular/core';
+import { Observable, Subject } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class WebSocketService {
+  private socket!: WebSocket;
+  private messages$ = new Subject<string>();
+
+  connect(url: string): void {
+    this.socket = new WebSocket(url);
+
+    // Listen for incoming messages
+    this.socket.onmessage = (event) => {
+      this.messages$.next(event.data);
+    };
+
+    // Handle socket close
+    this.socket.onclose = () => {
+      console.log('WebSocket closed');
+    };
+
+    // Handle socket errors
+    this.socket.onerror = (error) => {
+      console.error('WebSocket error', error);
+    };
+  }
+
+  sendMessage(message: string): void {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(message);
+    } else {
+      console.error('WebSocket is not open');
+    }
+  }
+
+  getMessages(): Observable<string> {
+    return this.messages$.asObservable();
+  }
+
+  disconnect(): void {
+    if (this.socket) {
+      this.socket.close();
+    }
+  }
+}
+
+2. Component
+
+import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Subscription } from 'rxjs';
+import { WebSocketService } from './web-socket.service';
+
+@Component({
+  selector: 'app-websocket',
+  template: `<div *ngFor="let message of messages">{{ message }}</div>`,
+})
+export class WebsocketComponent implements OnInit, OnDestroy {
+  private subscription!: Subscription;
+  messages: string[] = [];
+
+  constructor(private webSocketService: WebSocketService) {}
+
+  ngOnInit(): void {
+    // Connect to the WebSocket
+    this.webSocketService.connect('wss://example.com/socket');
+
+    // Subscribe to WebSocket messages
+    this.subscription = this.webSocketService.getMessages().subscribe((message) => {
+      this.messages.push(message);
+    });
+  }
+
+  ngOnDestroy(): void {
+    // Unsubscribe and disconnect
+    if (this.subscription) {
+      this.subscription.unsubscribe();
+    }
+    this.webSocketService.disconnect();
+  }
+}
+
+Explanation:
+
+1. Service Responsibilities:
+
+Establish and manage the WebSocket connection.
+
+Provide an observable (getMessages()) to allow components to subscribe to incoming messages.
+
+Handle sending messages and clean up the connection (disconnect()).
+
+
+
+2. Component Responsibilities:
+
+Subscribe to WebSocket messages using the service during ngOnInit.
+
+Unsubscribe from the observable and terminate the WebSocket connection during ngOnDestroy.
+
+
+
+
+Notes:
+
+Use dependency injection to share the WebSocket service across components if needed.
+
+Handle reconnect logic in the service if the WebSocket connection might drop unexpectedly.
+
+Customize error handling based on your application's requirements.
+
+
