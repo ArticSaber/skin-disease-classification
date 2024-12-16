@@ -1168,4 +1168,198 @@ Handle reconnect logic in the service if the WebSocket connection might drop une
 
 Customize error handling based on your application's requirements.
 
+*;₹>₹**#÷>74939030+772&÷^#;&#*,'bdjxkpdosheiei9eury484hrbrmkdkdksndbxhxksoosjdhfjrjdjjrirut749499392yehendksksjdidjdjjeiejrhr78393iejr
+
+To implement this setup on the frontend with Angular, you can use the STOMP over WebSocket protocol. The @stomp/stompjs library is a great tool for this. Below is the step-by-step implementation:
+
+
+---
+
+1. Install the Required Library
+
+Install the @stomp/stompjs library:
+
+npm install @stomp/stompjs
+
+
+---
+
+2. Create a WebSocket Service
+
+Create a reusable service to handle WebSocket connections, sending messages, and subscribing to topics.
+
+import { Injectable } from '@angular/core';
+import { Client, IMessage, StompConfig } from '@stomp/stompjs';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class WebSocketService {
+  private client!: Client;
+
+  // Initialize the WebSocket client
+  connect(endpoint: string): void {
+    this.client = new Client({
+      brokerURL: endpoint, // Your WebSocket endpoint
+      reconnectDelay: 5000, // Auto-reconnect every 5 seconds
+      debug: (msg: string) => console.log(msg),
+    });
+
+    // Activate the connection
+    this.client.activate();
+  }
+
+  // Subscribe to a specific topic
+  subscribe(topic: string, callback: (message: IMessage) => void): void {
+    this.client.onConnect = () => {
+      console.log(`Connected to WebSocket: ${topic}`);
+      this.client.subscribe(topic, callback);
+    };
+
+    this.client.onDisconnect = () => {
+      console.log('Disconnected from WebSocket');
+    };
+  }
+
+  // Send data to the server
+  send(destination: string, body: any): void {
+    if (this.client && this.client.connected) {
+      this.client.publish({
+        destination,
+        body: JSON.stringify(body),
+      });
+    } else {
+      console.error('WebSocket is not connected');
+    }
+  }
+
+  // Disconnect the WebSocket
+  disconnect(): void {
+    if (this.client) {
+      this.client.deactivate();
+      console.log('WebSocket connection closed');
+    }
+  }
+}
+
+
+---
+
+3. Use the WebSocket Service in a Component
+
+Use this service in your component to connect to /topic/team/teamid and send data to /team/addteamtodo/userid.
+
+Component:
+
+import { Component, OnInit, OnDestroy } from '@angular/core';
+import { WebSocketService } from './web-socket.service';
+
+@Component({
+  selector: 'app-team-todo',
+  template: `
+    <div>
+      <h3>Messages for Team</h3>
+      <ul>
+        <li *ngFor="let message of messages">{{ message }}</li>
+      </ul>
+
+      <input [(ngModel)]="todo" placeholder="Enter a todo" />
+      <button (click)="addTodo()">Add Todo</button>
+    </div>
+  `,
+})
+export class TeamTodoComponent implements OnInit, OnDestroy {
+  messages: string[] = [];
+  todo: string = '';
+  private topic = '/topic/team/123'; // Replace 123 with dynamic team ID
+  private destination = '/app/team/addteamtodo/456'; // Replace 456 with user ID
+
+  constructor(private webSocketService: WebSocketService) {}
+
+  ngOnInit(): void {
+    // Connect to the WebSocket server
+    this.webSocketService.connect('/ws-todo');
+
+    // Subscribe to the topic for team updates
+    this.webSocketService.subscribe(this.topic, (message) => {
+      this.messages.push(message.body); // Append new messages to the list
+    });
+  }
+
+  addTodo(): void {
+    // Send a message to the backend
+    const payload = { todo: this.todo, teamId: 123, userId: 456 }; // Adjust the payload structure as needed
+    this.webSocketService.send(this.destination, payload);
+    this.todo = ''; // Clear input
+  }
+
+  ngOnDestroy(): void {
+    // Disconnect from the WebSocket server
+    this.webSocketService.disconnect();
+  }
+}
+
+
+---
+
+4. Key Points to Understand
+
+1. WebSocket Endpoint:
+
+The WebSocket endpoint (/ws-todo) is used to establish the connection.
+
+
+
+2. Topics:
+
+The frontend subscribes to /topic/team/teamid to receive team-specific updates.
+
+
+
+3. Sending Data:
+
+Data is sent to /app/team/addteamtodo/userid. Since this has the application prefix (/app), the backend should handle this route as defined in your @MessageMapping method.
+
+
+
+4. Dynamic Topics:
+
+Replace hardcoded IDs (teamid, userid) with dynamic values based on your application's context.
+
+
+
+
+
+---
+
+Backend Mapping for Clarity
+
+Ensure your Spring Boot backend maps the endpoints correctly:
+
+@Controller
+public class TeamController {
+  
+    @MessageMapping("/team/addteamtodo/{userid}")
+    @SendTo("/topic/team/{teamid}")
+    public TeamTodo handleAddTeamTodo(@DestinationVariable String userid, @Payload TeamTodo todo) {
+        // Logic to handle the todo (e.g., save to database)
+        return todo; // Broadcast to team
+    }
+}
+
+
+---
+
+Summary
+
+Connect to /ws-todo using STOMP.
+
+Subscribe to /topic/team/teamid for team-specific updates.
+
+Send data to /app/team/addteamtodo/userid for processing on the backend.
+
+Ensure the service handles WebSocket connection lifecycle to maintain robust communication.
+
+
+
 
