@@ -1522,4 +1522,163 @@ The todo list is always in sync with the backend.
 Only one WebSocket connection is used for all CRUD operations.
 
 
+ndkdjdkdhdiey3i3ueuhrjrjrhdbfbcnxlsllsksoowpwi2ie93u4y484894i3ueokejdd
+
+To connect to your WebSocket in an Angular application and interact with your Spring Boot backend, follow these steps:
+
+
+---
+
+1. Install the Required Dependencies
+
+Install the WebSocket and STOMP library for Angular:
+
+npm install @stomp/stompjs sockjs-client
+
+
+---
+
+2. Set Up WebSocket in Angular
+
+Create a WebSocket Service
+
+Create a service (e.g., websocket.service.ts) to handle the WebSocket connection:
+
+import { Injectable } from '@angular/core';
+import * as Stomp from '@stomp/stompjs';
+import * as SockJS from 'sockjs-client';
+import { Observable, Subject } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class WebSocketService {
+  private stompClient: Stomp.Client | null = null;
+  private subject = new Subject<any>();
+
+  constructor() {}
+
+  // Connect to WebSocket
+  connect(): void {
+    const socket = new SockJS('http://localhost:8080/ws-todo'); // Backend WebSocket endpoint
+    this.stompClient = Stomp.over(socket);
+
+    this.stompClient.connect({}, () => {
+      console.log('WebSocket connected');
+
+      // Subscribe to the topic for incoming messages
+      this.stompClient?.subscribe('/topic/team/', (message) => {
+        this.subject.next(JSON.parse(message.body));
+      });
+    });
+  }
+
+  // Disconnect from WebSocket
+  disconnect(): void {
+    if (this.stompClient) {
+      this.stompClient.disconnect(() => {
+        console.log('WebSocket disconnected');
+      });
+    }
+  }
+
+  // Send a message
+  sendMessage(destination: string, payload: any): void {
+    this.stompClient?.send(destination, {}, JSON.stringify(payload));
+  }
+
+  // Observe incoming messages
+  getMessages(): Observable<any> {
+    return this.subject.asObservable();
+  }
+}
+
+
+---
+
+3. Using the Service in a Component
+
+Import and Inject the Service
+
+In your component (e.g., todo.component.ts), use the WebSocket service to send and receive messages.
+
+import { Component, OnInit, OnDestroy } from '@angular/core';
+import { WebSocketService } from './websocket.service';
+
+@Component({
+  selector: 'app-todo',
+  templateUrl: './todo.component.html',
+  styleUrls: ['./todo.component.css'],
+})
+export class TodoComponent implements OnInit, OnDestroy {
+  todos: any[] = [];
+  newTodo = '';
+
+  constructor(private webSocketService: WebSocketService) {}
+
+  ngOnInit(): void {
+    // Connect to WebSocket
+    this.webSocketService.connect();
+
+    // Subscribe to WebSocket messages
+    this.webSocketService.getMessages().subscribe((message) => {
+      if (message.operation === 'CREATE') {
+        this.todos.push(message.todo);
+      }
+    });
+  }
+
+  // Add a new todo
+  addTodo(): void {
+    const todo = { name: this.newTodo };
+    this.webSocketService.sendMessage('/app/team/addteamtodo/123', todo); // Replace '123' with the userId
+    this.newTodo = '';
+  }
+
+  ngOnDestroy(): void {
+    // Disconnect from WebSocket
+    this.webSocketService.disconnect();
+  }
+}
+
+
+---
+
+4. Modify Backend Endpoints if Needed
+
+Ensure the Spring Boot WebSocket configuration aligns with your Angular connection. For example:
+
+The /ws-todo endpoint is the WebSocket entry point.
+
+The /topic/team destination is for sending messages.
+
+The /app/team/addteamtodo/{uid} destination is for receiving add-todo messages.
+
+
+
+---
+
+5. Enable CORS in Spring Boot
+
+Ensure the WebSocket endpoint allows requests from your Angular app:
+
+registry.addEndpoint("/ws-todo")
+    .setAllowedOrigins("http://localhost:4200")
+    .addInterceptors(new JwtHandshakeInterceptor(jwtUtil))
+    .withSockJS();
+
+
+---
+
+6. Run the Application
+
+Start the Spring Boot backend.
+
+Run the Angular frontend (ng serve).
+
+Open the browser console to check WebSocket connection logs.
+
+
+Now, your Angular app will be able to interact with the WebSocket for CRUD operations.
+
 
