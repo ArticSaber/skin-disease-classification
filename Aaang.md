@@ -1362,4 +1362,164 @@ Ensure the service handles WebSocket connection lifecycle to maintain robust com
 
 
 
+hjjjkkm
+If your frontend is in Angular and you want to handle CRUD operations with a WebSocket connection while keeping the todo list in sync with a single array, follow these steps:
+
+1. WebSocket Service
+
+Create an Angular service to handle WebSocket communication.
+
+import { Injectable } from '@angular/core';
+import { Observable, Subject } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class WebSocketService {
+  private socket: WebSocket;
+  private messages$: Subject<any> = new Subject<any>();
+
+  connect(url: string): Observable<any> {
+    this.socket = new WebSocket(url);
+
+    this.socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      this.messages$.next(message);
+    };
+
+    this.socket.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+
+    this.socket.onclose = () => {
+      console.log('WebSocket connection closed');
+    };
+
+    return this.messages$.asObservable();
+  }
+
+  sendMessage(message: any): void {
+    if (this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message));
+    } else {
+      console.error('WebSocket is not open');
+    }
+  }
+
+  close(): void {
+    this.socket.close();
+  }
+}
+
+2. Todo Array in Component
+
+Create a component to manage the todo list array. Use the WebSocket service to listen for messages and update the array dynamically.
+
+import { Component, OnInit, OnDestroy } from '@angular/core';
+import { WebSocketService } from './web-socket.service';
+
+interface Todo {
+  id: number;
+  title: string;
+  completed: boolean;
+}
+
+@Component({
+  selector: 'app-todo',
+  templateUrl: './todo.component.html',
+  styleUrls: ['./todo.component.css'],
+})
+export class TodoComponent implements OnInit, OnDestroy {
+  todos: Todo[] = [];
+  private wsUrl = 'ws://localhost:8080/outtodo/teamid'; // Replace with your actual WebSocket URL
+  private subscription: any;
+
+  constructor(private webSocketService: WebSocketService) {}
+
+  ngOnInit(): void {
+    this.subscription = this.webSocketService.connect(this.wsUrl).subscribe((message: any) => {
+      this.handleWebSocketMessage(message);
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.subscription.unsubscribe();
+    this.webSocketService.close();
+  }
+
+  handleWebSocketMessage(message: any): void {
+    switch (message.operation) {
+      case 'CREATE':
+        this.todos.push(message.data);
+        break;
+      case 'UPDATE':
+        const indexToUpdate = this.todos.findIndex((todo) => todo.id === message.data.id);
+        if (indexToUpdate !== -1) {
+          this.todos[indexToUpdate] = message.data;
+        }
+        break;
+      case 'DELETE':
+        this.todos = this.todos.filter((todo) => todo.id !== message.data.id);
+        break;
+      default:
+        console.error('Unknown operation:', message.operation);
+    }
+  }
+
+  addTodo(newTodo: Todo): void {
+    const message = { operation: 'CREATE', data: newTodo };
+    this.webSocketService.sendMessage(message);
+  }
+
+  updateTodo(updatedTodo: Todo): void {
+    const message = { operation: 'UPDATE', data: updatedTodo };
+    this.webSocketService.sendMessage(message);
+  }
+
+  deleteTodo(todoId: number): void {
+    const message = { operation: 'DELETE', data: { id: todoId } };
+    this.webSocketService.sendMessage(message);
+  }
+}
+
+3. Component Template
+
+Create an HTML template to display the todo list and provide buttons for CRUD operations.
+
+<div>
+  <h1>Todo List</h1>
+  <ul>
+    <li *ngFor="let todo of todos">
+      {{ todo.title }}
+      <button (click)="updateTodo({ ...todo, completed: !todo.completed })">
+        {{ todo.completed ? 'Mark as Incomplete' : 'Mark as Complete' }}
+      </button>
+      <button (click)="deleteTodo(todo.id)">Delete</button>
+    </li>
+  </ul>
+
+  <div>
+    <input #newTodoTitle type="text" placeholder="New Todo Title" />
+    <button (click)="addTodo({ id: Date.now(), title: newTodoTitle.value, completed: false })">
+      Add Todo
+    </button>
+  </div>
+</div>
+
+4. How It Works
+
+The WebSocket connection is opened when the component initializes and closed when the component is destroyed.
+
+Incoming WebSocket messages trigger the handleWebSocketMessage method, updating the todos array dynamically based on the operation.
+
+CRUD actions (addTodo, updateTodo, deleteTodo) send corresponding WebSocket messages to the server.
+
+
+This setup ensures that:
+
+The todo list is always in sync with the backend.
+
+Only one WebSocket connection is used for all CRUD operations.
+
+
 
