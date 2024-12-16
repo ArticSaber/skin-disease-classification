@@ -1682,3 +1682,131 @@ Open the browser console to check WebSocket connection logs.
 Now, your Angular app will be able to interact with the WebSocket for CRUD operations.
 
 
+
+
+
+The error indicates that the connect method no longer exists on the Client class in the latest version of @stomp/stompjs. Instead, the Client class now uses the activate method to establish a WebSocket connection.
+
+Here’s how to fix your WebSocketService to align with the updated @stomp/stompjs API:
+
+
+---
+
+1. Updated WebSocket Service
+
+import { Injectable } from '@angular/core';
+import { Client, IMessage, over } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
+import { Observable, Subject } from 'rxjs';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class WebSocketService {
+  private stompClient: Client | null = null;
+  private subject = new Subject<any>();
+
+  constructor() {
+    this.initializeWebSocketConnection();
+  }
+
+  // Initialize WebSocket Connection
+  private initializeWebSocketConnection(): void {
+    const socket = new SockJS('http://localhost:8080/ws-todo'); // Backend WebSocket endpoint
+    this.stompClient = new Client({
+      webSocketFactory: () => socket as WebSocket,
+      debug: (str) => console.log(str), // Optional for debugging
+      reconnectDelay: 5000, // Reconnect after 5 seconds if the connection fails
+    });
+
+    // On connect, subscribe to the desired topic
+    this.stompClient.onConnect = (frame) => {
+      console.log('Connected: ', frame);
+
+      this.stompClient?.subscribe('/topic/team/', (message: IMessage) => {
+        this.subject.next(JSON.parse(message.body));
+      });
+    };
+
+    // Handle errors
+    this.stompClient.onStompError = (error) => {
+      console.error('Stomp error: ', error);
+    };
+
+    // Activate the WebSocket connection
+    this.stompClient.activate();
+  }
+
+  // Disconnect WebSocket
+  disconnect(): void {
+    if (this.stompClient) {
+      this.stompClient.deactivate();
+      console.log('WebSocket disconnected');
+    }
+  }
+
+  // Send a message
+  sendMessage(destination: string, payload: any): void {
+    this.stompClient?.publish({
+      destination,
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // Get messages as an Observable
+  getMessages(): Observable<any> {
+    return this.subject.asObservable();
+  }
+}
+
+
+---
+
+2. Explanation of Key Changes
+
+1. Use activate Instead of connect:
+
+The activate method is now used to initiate the WebSocket connection.
+
+
+
+2. Set webSocketFactory:
+
+This replaces direct instantiation of SockJS and ensures compatibility with the Client class.
+
+
+
+3. Event Handlers (onConnect and onStompError):
+
+The onConnect callback is used to handle subscription logic after the WebSocket is connected.
+
+The onStompError callback handles errors during the connection.
+
+
+
+4. Reconnect Logic:
+
+The reconnectDelay property allows automatic reconnection if the WebSocket disconnects.
+
+
+
+5. Publishing Messages:
+
+Use the publish method of the Client class to send messages.
+
+
+
+
+
+---
+
+3. Usage in Your Component
+
+The usage in your Angular component remains the same. You can connect, send messages, and observe messages using the updated WebSocketService.
+
+
+---
+
+This should fix the errors and align your service with the updated @stomp/stompjs API.
+
+
